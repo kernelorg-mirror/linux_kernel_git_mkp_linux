@@ -197,6 +197,9 @@ static int slave_configure(struct scsi_device *sdev)
 		 * page x08, so we will skip it. */
 		sdev->skip_ms_page_8 = 1;
 
+		/* Do not attempt to use REPORT SUPPORTED OPERATION CODES */
+		sdev->no_report_opcodes = 1;
+
 		/* Some disks return the total number of blocks in response
 		 * to READ CAPACITY rather than the highest block number.
 		 * If this device makes that mistake, tell the sd driver. */
