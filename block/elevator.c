@@ -82,6 +82,12 @@ int elv_rq_merge_ok(struct request *rq, struct bio *bio)
 		return 0;
 
 	/*
+	 * Don't merge write same requests
+	 */
+	if ((bio->bi_rw & REQ_WRITE_SAME) || (rq->bio->bi_rw & REQ_WRITE_SAME))
+		return 0;
+
+	/*
 	 * Don't merge discard requests and secure discard requests
 	 */
 	if ((bio->bi_rw & REQ_SECURE) != (rq->bio->bi_rw & REQ_SECURE))
@@ -639,7 +645,8 @@ void __elv_add_request(struct request_queue *q, struct request *rq, int where)
 	if (rq->cmd_flags & REQ_SOFTBARRIER) {
 		/* barriers are scheduling boundary, update end_sector */
 		if (rq->cmd_type == REQ_TYPE_FS ||
-		    (rq->cmd_flags & REQ_DISCARD)) {
+		    (rq->cmd_flags & REQ_DISCARD) ||
+		    (rq->cmd_flags & REQ_WRITE_SAME)) {
 			q->end_sector = rq_end_sector(rq);
 			q->boundary_rq = rq;
 		}
