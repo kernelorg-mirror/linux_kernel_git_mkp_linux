@@ -358,9 +358,18 @@ static inline char *__bio_kmap_irq(struct bio *bio, unsigned short idx,
 /*
  * Check whether this bio carries any data or not. A NULL bio is allowed.
  */
-static inline int bio_has_data(struct bio *bio)
+static inline bool bio_has_data(struct bio *bio)
 {
-	return bio && bio->bi_io_vec != NULL;
+	if (!bio)
+		return false;
+
+	if (bio->bi_rw & REQ_DISCARD)
+		return false;
+
+	if (!bio->bi_io_vec)
+		return false;
+
+	return true;
 }
 
 /*
