@@ -366,6 +366,9 @@ static inline bool bio_has_data(struct bio *bio)
 	if (bio->bi_rw & REQ_DISCARD)
 		return false;
 
+	if (bio->bi_rw & REQ_WRITE_SAME)
+		return false;
+
 	if (!bio->bi_io_vec)
 		return false;
 
