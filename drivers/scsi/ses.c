@@ -456,7 +456,7 @@ static void ses_match_to_enclosure(struct enclosure_device *edev,
 
 	ses_enclosure_data_process(edev, to_scsi_device(edev->edev.parent), 0);
 
-	if (!sdev->vpd_pg83_len)
+	if (sdev->vpd_pg83_len < 4)
 		return;
 
 	desc = sdev->vpd_pg83 + 4;

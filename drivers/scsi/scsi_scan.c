@@ -252,6 +252,7 @@ static struct scsi_device *scsi_alloc_sdev(struct scsi_target *starget,
 	INIT_LIST_HEAD(&sdev->starved_entry);
 	INIT_LIST_HEAD(&sdev->event_list);
 	spin_lock_init(&sdev->list_lock);
+	spin_lock_init(&sdev->reconfig_lock);
 	INIT_WORK(&sdev->event_work, scsi_evt_thread);
 	INIT_WORK(&sdev->requeue_work, scsi_requeue_run_queue);
 
@@ -1586,7 +1587,11 @@ EXPORT_SYMBOL(scsi_add_device);
 void scsi_rescan_device(struct device *dev)
 {
 	struct scsi_driver *drv;
-	
+	struct scsi_device *sdev = to_scsi_device(dev);
+
+	sdev->vpd_invalid = 1;
+	scsi_attach_vpd(sdev);
+
 	if (!dev->driver)
 		return;
 

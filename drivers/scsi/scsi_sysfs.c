@@ -761,8 +761,10 @@ show_vpd_##_page(struct file *filp, struct kobject *kobj,	\
 {									\
 	struct device *dev = container_of(kobj, struct device, kobj);	\
 	struct scsi_device *sdev = to_scsi_device(dev);			\
-	if (!sdev->vpd_##_page)						\
-		return -EINVAL;						\
+	if (sdev->vpd_invalid)						\
+		scsi_attach_vpd(sdev);					\
+	if (sdev->vpd_##_page##_len < 0)				\
+		return sdev->vpd_##_page##_len;				\
 	return memory_read_from_buffer(buf, count, &off,		\
 				       sdev->vpd_##_page,		\
 				       sdev->vpd_##_page##_len);	\

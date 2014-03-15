@@ -1044,10 +1044,11 @@ void scsi_attach_vpd(struct scsi_device *sdev)
 	int vpd_len = 255;
 	int pg80_supported = 0;
 	int pg83_supported = 0;
-	unsigned char *vpd_buf;
+	unsigned char *vpd_buf, *tmp_pg;
 
 	if (sdev->skip_vpd_pages)
 		return;
+
 retry_pg0:
 	vpd_buf = kmalloc(vpd_len, GFP_KERNEL);
 	if (!vpd_buf)
@@ -1075,45 +1076,89 @@ retry_pg0:
 	}
 	kfree(vpd_buf);
 
-	if (pg80_supported) {
 retry_pg80:
+	if (pg80_supported) {
 		vpd_buf = kmalloc(vpd_len, GFP_KERNEL);
 		if (!vpd_buf)
-			return;
-
-		result = scsi_vpd_inquiry(sdev, vpd_buf, 0x80, vpd_len);
+			result = -ENOMEM;
+		else
+			result = scsi_vpd_inquiry(sdev, vpd_buf,
+						  0x80, vpd_len);
 		if (result < 0) {
 			kfree(vpd_buf);
+			spin_lock(&sdev->reconfig_lock);
+			tmp_pg = sdev->vpd_pg80;
+			sdev->vpd_pg80 = NULL;
+			sdev->vpd_pg80_len = result;
+			kfree(tmp_pg);
+			spin_unlock(&sdev->reconfig_lock);
+			/*
+			 * An unexpected error occurred,
+			 * do not clear vpd_invalid flag
+			 */
 			return;
+		} else {
+			if (result > vpd_len) {
+				vpd_len = result;
+				kfree(vpd_buf);
+				goto retry_pg80;
+			}
+			spin_lock(&sdev->reconfig_lock);
+			sdev->vpd_pg80 = vpd_buf;
+			sdev->vpd_pg80_len = result;
+			spin_unlock(&sdev->reconfig_lock);
 		}
-		if (result > vpd_len) {
-			vpd_len = result;
-			kfree(vpd_buf);
-			goto retry_pg80;
-		}
-		sdev->vpd_pg80_len = result;
-		sdev->vpd_pg80 = vpd_buf;
+	} else {
+		spin_lock(&sdev->reconfig_lock);
+		tmp_pg = sdev->vpd_pg80;
+		sdev->vpd_pg80 = NULL;
+		sdev->vpd_pg80_len = -ENOENT;
+		kfree(tmp_pg);
+		spin_unlock(&sdev->reconfig_lock);
 	}
 
-	if (pg83_supported) {
 retry_pg83:
+	if (pg83_supported) {
 		vpd_buf = kmalloc(vpd_len, GFP_KERNEL);
 		if (!vpd_buf)
-			return;
-
-		result = scsi_vpd_inquiry(sdev, vpd_buf, 0x83, vpd_len);
+			result = -ENOMEM;
+		else
+			result = scsi_vpd_inquiry(sdev, vpd_buf,
+						  0x83, vpd_len);
 		if (result < 0) {
 			kfree(vpd_buf);
+			spin_lock(&sdev->reconfig_lock);
+			tmp_pg = sdev->vpd_pg83;
+			sdev->vpd_pg83 = NULL;
+			sdev->vpd_pg83_len = result;
+			kfree(tmp_pg);
+			spin_unlock(&sdev->reconfig_lock);
+			/*
+			 * An unexpected error occurred,
+			 * do not clear vpd_invalid flag
+			 */
 			return;
+		} else {
+			if (result > vpd_len) {
+				vpd_len = result;
+				kfree(vpd_buf);
+				goto retry_pg83;
+			}
+			spin_lock(&sdev->reconfig_lock);
+			sdev->vpd_pg83 = vpd_buf;
+			sdev->vpd_pg83_len = result;
+			spin_unlock(&sdev->reconfig_lock);
 		}
-		if (result > vpd_len) {
-			vpd_len = result;
-			kfree(vpd_buf);
-			goto retry_pg83;
-		}
-		sdev->vpd_pg83_len = result;
-		sdev->vpd_pg83 = vpd_buf;
+	} else {
+		spin_lock(&sdev->reconfig_lock);
+		tmp_pg = sdev->vpd_pg83;
+		sdev->vpd_pg83 = NULL;
+		sdev->vpd_pg83_len = -ENOENT;
+		kfree(tmp_pg);
+		spin_unlock(&sdev->reconfig_lock);
 	}
+
+	sdev->vpd_invalid = 0;
 }
 
 /**

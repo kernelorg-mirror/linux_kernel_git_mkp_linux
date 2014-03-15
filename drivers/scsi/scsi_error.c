@@ -393,6 +393,7 @@ static void scsi_report_sense(struct scsi_device *sdev,
 
 	if (sshdr->sense_key == UNIT_ATTENTION) {
 		if (sshdr->asc == 0x3f && sshdr->ascq == 0x03) {
+			sdev->vpd_invalid = 1;
 			evt_type = SDEV_EVT_INQUIRY_CHANGE_REPORTED;
 			sdev_printk(KERN_WARNING, sdev,
 				    "Inquiry data has changed");

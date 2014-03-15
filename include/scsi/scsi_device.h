@@ -117,6 +117,7 @@ struct scsi_device {
 	unsigned char *vpd_pg83;
 	unsigned char vpd_pg80_len;
 	unsigned char *vpd_pg80;
+	spinlock_t reconfig_lock;
 	unsigned char current_tag;	/* current tag */
 	struct scsi_target      *sdev_target;   /* used only for single_lun */
 
@@ -171,6 +172,7 @@ struct scsi_device {
 	unsigned is_visible:1;	/* is the device visible in sysfs */
 	unsigned wce_default_on:1;	/* Cache is ON by default */
 	unsigned no_dif:1;	/* T10 PI (DIF) should be disabled */
+	unsigned vpd_invalid:1; /* VPD data needs to be refreshed */
 
 	atomic_t disk_events_disable_depth; /* disable depth for disk events */
 
