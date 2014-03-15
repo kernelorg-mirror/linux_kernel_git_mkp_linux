@@ -115,6 +115,8 @@ struct scsi_device {
 	const char * rev;		/* ... "nullnullnullnull" before scan */
 	unsigned char vpd_pg83_len;
 	unsigned char *vpd_pg83;
+	unsigned char vpd_pg80_len;
+	unsigned char *vpd_pg80;
 	unsigned char current_tag;	/* current tag */
 	struct scsi_target      *sdev_target;   /* used only for single_lun */
 

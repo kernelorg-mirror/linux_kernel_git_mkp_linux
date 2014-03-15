@@ -413,6 +413,7 @@ static void scsi_device_dev_release_usercontext(struct work_struct *work)
 	sdev->request_queue = NULL;
 
 	kfree(sdev->vpd_pg83);
+	kfree(sdev->vpd_pg80);
 	kfree(sdev->inquiry);
 	kfree(sdev);
 
@@ -773,6 +774,7 @@ static struct bin_attribute dev_attr_vpd_##_page = {		\
 };
 
 sdev_vpd_pg_attr(pg83);
+sdev_vpd_pg_attr(pg80);
 
 static ssize_t
 show_iostat_counterbits(struct device *dev, struct device_attribute *attr,
@@ -962,6 +964,7 @@ static struct attribute *scsi_sdev_attrs[] = {
 
 static struct bin_attribute *scsi_sdev_bin_attrs[] = {
 	&dev_attr_vpd_pg83,
+	&dev_attr_vpd_pg80,
 	NULL
 };
 static struct attribute_group scsi_sdev_attr_group = {

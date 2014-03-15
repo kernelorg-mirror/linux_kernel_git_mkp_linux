@@ -1033,7 +1033,8 @@ EXPORT_SYMBOL_GPL(scsi_get_vpd_page);
  * scsi_attach_vpd - Attach Vital Product Data to a SCSI device structure
  * @sdev: The device to ask
  *
- * Attach the 'Device Identification' VPD page (0x83) to a SCSI device
+ * Attach the 'Device Identification' VPD page (0x83) and the
+ * 'Unit Serial Number' VPD page (0x80) to a SCSI device
  * structure. This information can be used to identify the device
  * uniquely.
  */
@@ -1041,6 +1042,7 @@ void scsi_attach_vpd(struct scsi_device *sdev)
 {
 	int result, i;
 	int vpd_len = 255;
+	int pg80_supported = 0;
 	int pg83_supported = 0;
 	unsigned char *vpd_buf;
 
@@ -1064,11 +1066,34 @@ retry_pg0:
 	}
 
 	for (i = 4; i < result; i++) {
+		if (vpd_buf[i] == 0x80) {
+			pg80_supported = 1;
+		}
 		if (vpd_buf[i] == 0x83) {
 			pg83_supported = 1;
 		}
 	}
 	kfree(vpd_buf);
+
+	if (pg80_supported) {
+retry_pg80:
+		vpd_buf = kmalloc(vpd_len, GFP_KERNEL);
+		if (!vpd_buf)
+			return;
+
+		result = scsi_vpd_inquiry(sdev, vpd_buf, 0x80, vpd_len);
+		if (result < 0) {
+			kfree(vpd_buf);
+			return;
+		}
+		if (result > vpd_len) {
+			vpd_len = result;
+			kfree(vpd_buf);
+			goto retry_pg80;
+		}
+		sdev->vpd_pg80_len = result;
+		sdev->vpd_pg80 = vpd_buf;
+	}
 
 	if (pg83_supported) {
 retry_pg83:
