@@ -201,6 +201,29 @@ static int blk_ioctl_zeroout(struct block_device *bdev, uint64_t start,
 	return blkdev_issue_zeroout(bdev, start, len, GFP_KERNEL);
 }
 
+static int blk_ioctl_copy(struct block_device *bdev, uint64_t src_offset,
+			  uint64_t dst_offset, uint64_t len)
+{
+	if (src_offset & 511)
+		return -EINVAL;
+	if (dst_offset & 511)
+		return -EINVAL;
+	if (len & 511)
+		return -EINVAL;
+	src_offset >>= 9;
+	dst_offset >>= 9;
+	len >>= 9;
+
+	if (src_offset + len > (i_size_read(bdev->bd_inode) >> 9))
+		return -EINVAL;
+
+	if (dst_offset + len > (i_size_read(bdev->bd_inode) >> 9))
+		return -EINVAL;
+
+	return blkdev_issue_copy(bdev, src_offset, bdev, dst_offset, len,
+				 GFP_KERNEL);
+}
+
 static int put_ushort(unsigned long arg, unsigned short val)
 {
 	return put_user(val, (unsigned short __user *)arg);
@@ -326,6 +349,18 @@ int blkdev_ioctl(struct block_device *bdev, fmode_t mode, unsigned cmd,
 			return -EFAULT;
 
 		return blk_ioctl_zeroout(bdev, range[0], range[1]);
+	}
+
+	case BLKCOPY: {
+		uint64_t range[3];
+
+		if (!(mode & FMODE_WRITE))
+			return -EBADF;
+
+		if (copy_from_user(range, (void __user *)arg, sizeof(range)))
+			return -EFAULT;
+
+		return blk_ioctl_copy(bdev, range[0], range[1], range[2]);
 	}
 
 	case HDIO_GETGEO: {

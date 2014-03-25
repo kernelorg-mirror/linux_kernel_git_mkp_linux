@@ -117,6 +117,8 @@ struct scsi_device {
 	unsigned char *vpd_pg83;
 	unsigned char vpd_pg80_len;
 	unsigned char *vpd_pg80;
+	unsigned char naa_len;
+	unsigned char *naa;
 	spinlock_t reconfig_lock;
 	unsigned char current_tag;	/* current tag */
 	struct scsi_target      *sdev_target;   /* used only for single_lun */
@@ -150,6 +152,7 @@ struct scsi_device {
 	unsigned use_10_for_ms:1; /* first try 10-byte mode sense/select */
 	unsigned no_report_opcodes:1;	/* no REPORT SUPPORTED OPERATION CODES */
 	unsigned no_write_same:1;	/* no WRITE SAME command */
+	unsigned no_copy:1;		/* no copy offload */
 	unsigned use_16_for_rw:1; /* Use read/write(16) over read/write(10) */
 	unsigned skip_ms_page_8:1;	/* do not use MODE SENSE page 0x08 */
 	unsigned skip_ms_page_3f:1;	/* do not use MODE SENSE page 0x3f */

@@ -39,6 +39,11 @@ struct bvec_iter {
 						   current bvec */
 };
 
+struct bio_copy {
+	struct block_device	*bic_bdev;
+	sector_t		bic_sector;
+};
+
 /*
  * main unit of I/O for the block layer and lower layers (ie drivers and
  * stacking drivers)
@@ -81,6 +86,7 @@ struct bio {
 #if defined(CONFIG_BLK_DEV_INTEGRITY)
 	struct bio_integrity_payload *bi_integrity;  /* data integrity */
 #endif
+	struct bio_copy		*bi_copy; 	/* TODO, use bi_integrity */
 
 	unsigned short		bi_vcnt;	/* how many bio_vec's */
 
@@ -160,6 +166,7 @@ enum rq_flag_bits {
 	__REQ_DISCARD,		/* request to discard sectors */
 	__REQ_SECURE,		/* secure discard (used with __REQ_DISCARD) */
 	__REQ_WRITE_SAME,	/* write same block many times */
+	__REQ_COPY,		/* copy block range */
 
 	__REQ_NOIDLE,		/* don't anticipate more IO after this one */
 	__REQ_FUA,		/* forced unit access */
@@ -201,6 +208,7 @@ enum rq_flag_bits {
 #define REQ_PRIO		(1ULL << __REQ_PRIO)
 #define REQ_DISCARD		(1ULL << __REQ_DISCARD)
 #define REQ_WRITE_SAME		(1ULL << __REQ_WRITE_SAME)
+#define REQ_COPY		(1ULL << __REQ_COPY)
 #define REQ_NOIDLE		(1ULL << __REQ_NOIDLE)
 
 #define REQ_FAILFAST_MASK \
@@ -208,14 +216,15 @@ enum rq_flag_bits {
 #define REQ_COMMON_MASK \
 	(REQ_WRITE | REQ_FAILFAST_MASK | REQ_SYNC | REQ_META | REQ_PRIO | \
 	 REQ_DISCARD | REQ_WRITE_SAME | REQ_NOIDLE | REQ_FLUSH | REQ_FUA | \
-	 REQ_SECURE)
+	 REQ_SECURE | REQ_COPY)
 #define REQ_CLONE_MASK		REQ_COMMON_MASK
 
-#define BIO_NO_ADVANCE_ITER_MASK	(REQ_DISCARD|REQ_WRITE_SAME)
+#define BIO_NO_ADVANCE_ITER_MASK	(REQ_DISCARD|REQ_WRITE_SAME|REQ_COPY)
 
 /* This mask is used for both bio and request merge checking */
 #define REQ_NOMERGE_FLAGS \
-	(REQ_NOMERGE | REQ_STARTED | REQ_SOFTBARRIER | REQ_FLUSH | REQ_FUA)
+	(REQ_NOMERGE | REQ_STARTED | REQ_SOFTBARRIER | REQ_FLUSH | REQ_FUA | \
+	 REQ_COPY)
 
 #define REQ_RAHEAD		(1ULL << __REQ_RAHEAD)
 #define REQ_THROTTLED		(1ULL << __REQ_THROTTLED)

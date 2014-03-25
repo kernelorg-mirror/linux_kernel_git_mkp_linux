@@ -25,10 +25,7 @@ static unsigned int __blk_recalc_rq_segments(struct request_queue *q,
 	 * This should probably be returning 0, but blk_add_request_payload()
 	 * (Christoph!!!!)
 	 */
-	if (bio->bi_rw & REQ_DISCARD)
-		return 1;
-
-	if (bio->bi_rw & REQ_WRITE_SAME)
+	if (bio->bi_rw & (REQ_DISCARD | REQ_WRITE_SAME | REQ_COPY))
 		return 1;
 
 	fbio = bio;
@@ -182,7 +179,7 @@ static int __blk_bios_map_sg(struct request_queue *q, struct bio *bio,
 	nsegs = 0;
 	cluster = blk_queue_cluster(q);
 
-	if (bio->bi_rw & REQ_DISCARD) {
+	if (bio->bi_rw & (REQ_DISCARD | REQ_COPY)) {
 		/*
 		 * This is a hack - drivers should be neither modifying the
 		 * biovec, nor relying on bi_vcnt - but because of
