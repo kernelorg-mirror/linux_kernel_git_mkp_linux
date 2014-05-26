@@ -644,7 +644,13 @@ struct biovec_slab {
 
 #if defined(CONFIG_BLK_DEV_INTEGRITY)
 
+static inline struct bio_integrity_payload * bio_integrity(struct bio *bio)
+{
+	if (bio->bi_rw & REQ_INTEGRITY)
+		return bio->bi_special.integrity;
 
+	return NULL;
+}
 
 #define bip_vec_idx(bip, idx)	(&(bip->bip_vec[(idx)]))
 
@@ -653,9 +659,7 @@ struct biovec_slab {
 
 #define bio_for_each_integrity_vec(_bvl, _bio, _iter)			\
 	for_each_bio(_bio)						\
-		bip_for_each_vec(_bvl, _bio->bi_integrity, _iter)
-
-#define bio_integrity(bio) (bio->bi_integrity != NULL)
+		bip_for_each_vec(_bvl, _bio->bi_special.integrity, _iter)
 
 extern struct bio_integrity_payload *bio_integrity_alloc(struct bio *, gfp_t, unsigned int);
 extern void bio_integrity_free(struct bio *);
