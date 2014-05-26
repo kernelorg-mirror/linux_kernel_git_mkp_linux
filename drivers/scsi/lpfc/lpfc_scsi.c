@@ -143,6 +143,32 @@ lpfc_debug_save_dif(struct lpfc_hba *phba, struct scsi_cmnd *cmnd)
 	}
 }
 
+#define BUILD_ASMIO 1
+#ifdef BUILD_ASMIO
+static inline unsigned
+lpfc_cmd_blksize(struct scsi_cmnd *sc)
+{
+	return scsi_prot_interval(sc);
+}
+
+#define LPFC_CHECK_PROTECT_GUARD       1
+#define LPFC_CHECK_PROTECT_REF         2
+static inline unsigned
+lpfc_cmd_protect(struct scsi_cmnd *sc, int flag)
+{
+	if (flag == LPFC_CHECK_PROTECT_GUARD)
+		return (scsi_prot_flagged(sc, SCSI_PROT_GUARD_CHECK));
+	if (flag == LPFC_CHECK_PROTECT_REF)
+		return (scsi_prot_flagged(sc, SCSI_PROT_REF_CHECK));
+	return 0;
+}
+
+static inline unsigned
+lpfc_cmd_guard_csum(struct scsi_cmnd *sc)
+{
+	return (scsi_prot_flagged(sc, SCSI_PROT_IP_CHECKSUM));
+}
+#else
 static inline unsigned
 lpfc_cmd_blksize(struct scsi_cmnd *sc)
 {
@@ -166,6 +192,7 @@ lpfc_cmd_guard_csum(struct scsi_cmnd *sc)
 		return 1;
 	return 0;
 }
+#endif
 
 /**
  * lpfc_sli4_set_rsp_sgl_last - Set the last bit in the response sge.
