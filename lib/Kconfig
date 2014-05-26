@@ -198,6 +198,13 @@ config RANDOM32_SELFTEST
 	  This option enables the 32 bit PRNG library functions to perform a
 	  self test on initialization.
 
+config T10_PI
+	tristate "Functions for generating and verifying T10 Protection Information"
+	select CRC_T10DIF
+	select CRYPTO_CRCT10DIF
+	help
+	  This code is for use with the block layer data integrity subsystem.
+
 #
 # compression support is select'ed if needed
 #
