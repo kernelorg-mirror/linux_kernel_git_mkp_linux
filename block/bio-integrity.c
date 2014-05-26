@@ -76,7 +76,8 @@ struct bio_integrity_payload *bio_integrity_alloc(struct bio *bio,
 
 	bip->bip_slab = idx;
 	bip->bip_bio = bio;
-	bio->bi_integrity = bip;
+	bio->bi_special.integrity = bip;
+	bio->bi_rw |= REQ_INTEGRITY;
 
 	return bip;
 err:
@@ -94,7 +95,7 @@ EXPORT_SYMBOL(bio_integrity_alloc);
  */
 void bio_integrity_free(struct bio *bio)
 {
-	struct bio_integrity_payload *bip = bio->bi_integrity;
+	struct bio_integrity_payload *bip = bio_integrity(bio);
 	struct bio_set *bs = bio->bi_pool;
 
 	if (bip->bip_owns_buf)
@@ -110,7 +111,7 @@ void bio_integrity_free(struct bio *bio)
 		kfree(bip);
 	}
 
-	bio->bi_integrity = NULL;
+	bio->bi_special.integrity = NULL;
 }
 EXPORT_SYMBOL(bio_integrity_free);
 
@@ -134,7 +135,7 @@ static inline unsigned int bip_integrity_vecs(struct bio_integrity_payload *bip)
 int bio_integrity_add_page(struct bio *bio, struct page *page,
 			   unsigned int len, unsigned int offset)
 {
-	struct bio_integrity_payload *bip = bio->bi_integrity;
+	struct bio_integrity_payload *bip = bio_integrity(bio);
 	struct bio_vec *iv;
 
 	if (bip->bip_vcnt >= bip_integrity_vecs(bip)) {
@@ -235,7 +236,7 @@ EXPORT_SYMBOL(bio_integrity_tag_size);
 static int bio_integrity_tag(struct bio *bio, void *tag_buf, unsigned int len,
 			     int set)
 {
-	struct bio_integrity_payload *bip = bio->bi_integrity;
+	struct bio_integrity_payload *bip = bio_integrity(bio);
 	struct blk_integrity *bi = bdev_get_integrity(bio->bi_bdev);
 	unsigned int nr_sectors;
 
@@ -310,12 +311,12 @@ static int bio_integrity_generate_verify(struct bio *bio, int operate)
 	struct bio_vec *bv;
 	sector_t sector;
 	unsigned int sectors, ret = 0, i;
-	void *prot_buf = bio->bi_integrity->bip_buf;
+	void *prot_buf = bio_integrity(bio)->bip_buf;
 
 	if (operate)
 		sector = bio->bi_iter.bi_sector;
 	else
-		sector = bio->bi_integrity->bip_iter.bi_sector;
+		sector = bio_integrity(bio)->bip_iter.bi_sector;
 
 	bix.disk_name = bio->bi_bdev->bd_disk->disk_name;
 	bix.sector_size = bi->sector_size;
@@ -511,7 +512,7 @@ static void bio_integrity_verify_fn(struct work_struct *work)
  */
 void bio_integrity_endio(struct bio *bio, int error)
 {
-	struct bio_integrity_payload *bip = bio->bi_integrity;
+	struct bio_integrity_payload *bip = bio_integrity(bio);
 
 	BUG_ON(bip->bip_bio != bio);
 
@@ -542,7 +543,7 @@ EXPORT_SYMBOL(bio_integrity_endio);
  */
 void bio_integrity_advance(struct bio *bio, unsigned int bytes_done)
 {
-	struct bio_integrity_payload *bip = bio->bi_integrity;
+	struct bio_integrity_payload *bip = bio_integrity(bio);
 	struct blk_integrity *bi = bdev_get_integrity(bio->bi_bdev);
 	unsigned bytes = bio_integrity_bytes(bi, bytes_done >> 9);
 
@@ -564,7 +565,7 @@ EXPORT_SYMBOL(bio_integrity_advance);
 void bio_integrity_trim(struct bio *bio, unsigned int offset,
 			unsigned int sectors)
 {
-	struct bio_integrity_payload *bip = bio->bi_integrity;
+	struct bio_integrity_payload *bip = bio_integrity(bio);
 	struct blk_integrity *bi = bdev_get_integrity(bio->bi_bdev);
 
 	bio_integrity_advance(bio, offset << 9);
@@ -583,7 +584,7 @@ EXPORT_SYMBOL(bio_integrity_trim);
 int bio_integrity_clone(struct bio *bio, struct bio *bio_src,
 			gfp_t gfp_mask)
 {
-	struct bio_integrity_payload *bip_src = bio_src->bi_integrity;
+	struct bio_integrity_payload *bip_src = bio_integrity(bio_src);
 	struct bio_integrity_payload *bip;
 
 	BUG_ON(bip_src == NULL);
