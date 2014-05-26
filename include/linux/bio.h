@@ -296,13 +296,38 @@ struct bio_integrity_payload {
 
 	unsigned short		bip_slab;	/* slab the bip came from */
 	unsigned short		bip_vcnt;	/* # of integrity bio_vecs */
-	unsigned		bip_owns_buf:1;	/* should free bip_buf */
+	unsigned short		bip_flags;	/* control flags */
 
 	struct work_struct	bip_work;	/* I/O completion */
 
 	struct bio_vec		*bip_vec;
 	struct bio_vec		bip_inline_vecs[0];/* embedded bvec array */
 };
+
+enum bip_flags {
+	BIP_BLOCK_INTEGRITY = 0,/* block layer owns integrity data, not fs */
+	BIP_MAPPED_INTEGRITY,	/* integrity metadata has been remapped */
+	BIP_CTRL_NOCHECK,	/* disable controller integrity checking */
+	BIP_DISK_NOCHECK,	/* disable disk integrity checking */
+};
+
+static inline bool bip_get_flag(struct bio_integrity_payload *bip,
+	enum bip_flags flag)
+{
+	if (bip && bip->bip_flags & (1 << flag))
+	    return true;
+
+	return false;
+}
+
+static inline void bip_set_flag(struct bio_integrity_payload *bip,
+	enum bip_flags flag)
+{
+	if (!bip)
+		return;
+
+	bip->bip_flags |= (1 << flag);
+}
 
 static inline sector_t bip_get_seed(struct bio_integrity_payload *bip)
 {
