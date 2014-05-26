@@ -1024,6 +1024,62 @@ int scsi_get_vpd_page(struct scsi_device *sdev, u8 page, unsigned char *buf,
 EXPORT_SYMBOL_GPL(scsi_get_vpd_page);
 
 /**
+ * scsi_lookup_naa - Lookup NAA descriptor in VPD page 0x83
+ * @sdev: The device to ask
+ *
+ * Copy offloading requires us to know the NAA descriptor for both
+ * source and target device. This descriptor is mandatory in the Device
+ * Identification VPD page. Locate this descriptor in the returned VPD
+ * data so we don't have to do lookups for every copy command.
+ */
+static void scsi_lookup_naa(struct scsi_device *sdev)
+{
+	unsigned char *buf = sdev->vpd_pg83;
+	unsigned int len = sdev->vpd_pg83_len;
+
+	if (buf[1] != 0x83 || get_unaligned_be16(&buf[2]) == 0) {
+		sdev_printk(KERN_ERR, sdev,
+			    "%s: VPD page 0x83 contains no descriptors\n",
+			    __func__);
+		return;
+	}
+
+	buf += 4;
+	len -= 4;
+
+	do {
+		unsigned int desig_len = buf[3] + 4;
+
+		/* Binary code set */
+		if ((buf[0] & 0xf) != 1)
+			goto skip;
+
+		/* Target association */
+		if ((buf[1] >> 4) & 0x3)
+			goto skip;
+
+		/* NAA designator */
+		if ((buf[1] & 0xf) != 0x3)
+			goto skip;
+
+		sdev->naa = buf;
+		sdev->naa_len = desig_len;
+
+		return;
+
+skip:
+		buf += desig_len;
+		len -= desig_len;
+
+	} while (len > 0);
+
+	sdev_printk(KERN_ERR, sdev,
+		    "%s: VPD page 0x83 NAA descriptor not found\n", __func__);
+
+	return;
+}
+
+/**
  * scsi_attach_vpd - Attach Vital Product Data to a SCSI device structure
  * @sdev: The device to ask
  *
@@ -1107,6 +1163,10 @@ retry_pg83:
 		}
 		sdev->vpd_pg83_len = result;
 		sdev->vpd_pg83 = vpd_buf;
+
+		/* Lookup NAA if 3PC set in INQUIRY response */
+		if (sdev->inquiry_len >= 6 && sdev->inquiry[5] & (1 << 3))
+			scsi_lookup_naa(sdev);
 	}
 }
 

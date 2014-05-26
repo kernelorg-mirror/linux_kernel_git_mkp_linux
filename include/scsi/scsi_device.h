@@ -119,6 +119,8 @@ struct scsi_device {
 	unsigned char *vpd_pg83;
 	int vpd_pg80_len;
 	unsigned char *vpd_pg80;
+	unsigned char naa_len;
+	unsigned char *naa;
 	unsigned char current_tag;	/* current tag */
 	struct scsi_target      *sdev_target;   /* used only for single_lun */
 
