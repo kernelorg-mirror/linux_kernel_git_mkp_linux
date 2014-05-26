@@ -138,23 +138,22 @@ void sd_dif_config_host(struct scsi_disk *sdkp)
  *
  * Type 3 does not have a reference tag so no remapping is required.
  */
-void sd_dif_prepare(struct request *rq, sector_t hw_sector,
-		    unsigned int sector_sz)
+void sd_dif_prepare(struct scsi_cmnd *scmd)
 {
-	const int tuple_sz = sizeof(struct sd_dif_tuple);
+	const int tuple_sz = sizeof(struct t10_pi_tuple);
 	struct bio *bio;
 	struct scsi_disk *sdkp;
-	struct sd_dif_tuple *sdt;
+	struct t10_pi_tuple *pi;
 	u32 phys, virt;
 
-	sdkp = rq->bio->bi_bdev->bd_disk->private_data;
+	sdkp = scsi_disk(scmd->request->rq_disk);
 
 	if (sdkp->protection_type == SD_DIF_TYPE3_PROTECTION)
 		return;
 
-	phys = hw_sector & 0xffffffff;
+	phys = scsi_prot_ref_tag(scmd);
 
-	__rq_for_each_bio(bio, rq) {
+	__rq_for_each_bio(bio, scmd->request) {
 		struct bio_integrity_payload *bip = bio_integrity(bio);
 		struct bio_vec iv;
 		struct bvec_iter iter;
@@ -167,19 +166,18 @@ void sd_dif_prepare(struct request *rq, sector_t hw_sector,
 		virt = bip_get_seed(bip) & 0xffffffff;
 
 		bip_for_each_vec(iv, bip, iter) {
-			sdt = kmap_atomic(iv.bv_page)
-				+ iv.bv_offset;
+			pi = kmap_atomic(iv.bv_page) + iv.bv_offset;
 
-			for (j = 0; j < iv.bv_len; j += tuple_sz, sdt++) {
+			for (j = 0; j < iv.bv_len; j += tuple_sz, pi++) {
 
-				if (be32_to_cpu(sdt->ref_tag) == virt)
-					sdt->ref_tag = cpu_to_be32(phys);
+				if (be32_to_cpu(pi->ref_tag) == virt)
+					pi->ref_tag = cpu_to_be32(phys);
 
 				virt++;
 				phys++;
 			}
 
-			kunmap_atomic(sdt);
+			kunmap_atomic(pi);
 		}
 
 		bip_set_flag(bip, BIP_MAPPED_INTEGRITY);
@@ -192,11 +190,11 @@ void sd_dif_prepare(struct request *rq, sector_t hw_sector,
  */
 void sd_dif_complete(struct scsi_cmnd *scmd, unsigned int good_bytes)
 {
-	const int tuple_sz = sizeof(struct sd_dif_tuple);
+	const int tuple_sz = sizeof(struct t10_pi_tuple);
 	struct scsi_disk *sdkp;
 	struct bio *bio;
-	struct sd_dif_tuple *sdt;
-	unsigned int j, sectors, sector_sz;
+	struct t10_pi_tuple *pi;
+	unsigned int j, intervals;
 	u32 phys, virt;
 
 	sdkp = scsi_disk(scmd->request->rq_disk);
@@ -204,12 +202,8 @@ void sd_dif_complete(struct scsi_cmnd *scmd, unsigned int good_bytes)
 	if (sdkp->protection_type == SD_DIF_TYPE3_PROTECTION || good_bytes == 0)
 		return;
 
-	sector_sz = scmd->device->sector_size;
-	sectors = good_bytes / sector_sz;
-
-	phys = blk_rq_pos(scmd->request) & 0xffffffff;
-	if (sector_sz == 4096)
-		phys >>= 3;
+	intervals = good_bytes / scmd->device->sector_size;
+	phys = scsi_prot_ref_tag(scmd);
 
 	__rq_for_each_bio(bio, scmd->request) {
 		struct bio_integrity_payload *bip = bio_integrity(bio);
@@ -219,25 +213,24 @@ void sd_dif_complete(struct scsi_cmnd *scmd, unsigned int good_bytes)
 		virt = bip_get_seed(bip) & 0xffffffff;
 
 		bip_for_each_vec(iv, bip, iter) {
-			sdt = kmap_atomic(iv.bv_page)
-				+ iv.bv_offset;
+			pi = kmap_atomic(iv.bv_page) + iv.bv_offset;
 
-			for (j = 0; j < iv.bv_len; j += tuple_sz, sdt++) {
+			for (j = 0; j < iv.bv_len; j += tuple_sz, pi++) {
 
-				if (sectors == 0) {
-					kunmap_atomic(sdt);
+				if (intervals == 0) {
+					kunmap_atomic(pi);
 					return;
 				}
 
-				if (be32_to_cpu(sdt->ref_tag) == phys)
-					sdt->ref_tag = cpu_to_be32(virt);
+				if (be32_to_cpu(pi->ref_tag) == phys)
+					pi->ref_tag = cpu_to_be32(virt);
 
 				virt++;
 				phys++;
-				sectors--;
+				intervals--;
 			}
 
-			kunmap_atomic(sdt);
+			kunmap_atomic(pi);
 		}
 	}
 }

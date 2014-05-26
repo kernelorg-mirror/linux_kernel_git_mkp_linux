@@ -592,10 +592,11 @@ static void scsi_disk_put(struct scsi_disk *sdkp)
 	mutex_unlock(&sd_ref_mutex);
 }
 
-static void sd_prot_op(struct scsi_cmnd *scmd, unsigned int dif)
+static unsigned char sd_setup_protect_cmnd(struct scsi_cmnd *scmd,
+					   unsigned int dix, unsigned int dif)
 {
+	struct bio_integrity_payload *bip = bio_integrity(scmd->request->bio);
 	unsigned int prot_op = SCSI_PROT_NORMAL;
-	unsigned int dix = scsi_prot_sg_count(scmd);
 
 	if (scmd->sc_data_direction == DMA_FROM_DEVICE) {
 		if (dif && dix)
@@ -613,8 +614,37 @@ static void sd_prot_op(struct scsi_cmnd *scmd, unsigned int dif)
 			prot_op = SCSI_PROT_WRITE_STRIP;
 	}
 
-	scsi_set_prot_op(scmd, prot_op);
+	/* Let HBA know which protection type is used so it knows which
+	 * fields to check.
+	 */
 	scsi_set_prot_type(scmd, dif);
+	scsi_set_prot_op(scmd, prot_op);
+
+	if (dix && bip_get_flag(bip, BIP_IP_CHECKSUM))
+		scmd->prot_flags |= SCSI_PROT_IP_CHECKSUM;
+
+	if (dif != SD_DIF_TYPE3_PROTECTION)
+		scmd->prot_flags |= SCSI_PROT_REF_INCREMENT;
+
+	if (prot_op != SCSI_PROT_WRITE_INSERT &&
+	    prot_op != SCSI_PROT_READ_INSERT &&
+	    !bip_get_flag(bip, BIP_CTRL_NOCHECK)) {
+		scmd->prot_flags |= SCSI_PROT_GUARD_CHECK;
+
+		if (dif != SD_DIF_TYPE3_PROTECTION)
+			scmd->prot_flags |= SCSI_PROT_REF_CHECK;
+	}
+
+	if (dif) {
+		scmd->prot_flags |= SCSI_PROT_TRANSFER_PI;
+
+		if (bip_get_flag(bip, BIP_DISK_NOCHECK))
+			return 3 << 5; /* Transmit but do not check PI */
+		else
+			return 1 << 5; /* Transmit and check PI */
+	}
+
+	return 0;
 }
 
 static void sd_config_discard(struct scsi_disk *sdkp, unsigned int mode)
@@ -867,7 +897,8 @@ static int sd_prep_fn(struct request_queue *q, struct request *rq)
 	sector_t block = blk_rq_pos(rq);
 	sector_t threshold;
 	unsigned int this_count = blk_rq_sectors(rq);
-	int ret, host_dif;
+	unsigned int dif, dix;
+	int ret;
 	unsigned char protect;
 
 	/*
@@ -994,7 +1025,7 @@ static int sd_prep_fn(struct request_queue *q, struct request *rq)
 		SCpnt->sc_data_direction = DMA_TO_DEVICE;
 
 		if (blk_integrity_rq(rq))
-			sd_dif_prepare(rq, block, sdp->sector_size);
+			sd_dif_prepare(SCpnt);
 
 	} else if (rq_data_dir(rq) == READ) {
 		SCpnt->cmnd[0] = READ_6;
@@ -1010,14 +1041,15 @@ static int sd_prep_fn(struct request_queue *q, struct request *rq)
 					"writing" : "reading", this_count,
 					blk_rq_sectors(rq)));
 
-	/* Set RDPROTECT/WRPROTECT if disk is formatted with DIF */
-	host_dif = scsi_host_dif_capable(sdp->host, sdkp->protection_type);
-	if (host_dif)
-		protect = 1 << 5;
+	dix = scsi_prot_sg_count(SCpnt);
+	dif = scsi_host_dif_capable(SCpnt->device->host, sdkp->protection_type);
+
+	if (dif || dix)
+		protect = sd_setup_protect_cmnd(SCpnt, dix, dif);
 	else
 		protect = 0;
 
-	if (host_dif == SD_DIF_TYPE2_PROTECTION) {
+	if (protect && sdkp->protection_type == SD_DIF_TYPE2_PROTECTION) {
 		SCpnt->cmnd = mempool_alloc(sd_cdb_pool, GFP_ATOMIC);
 
 		if (unlikely(SCpnt->cmnd == NULL)) {
@@ -1104,10 +1136,6 @@ static int sd_prep_fn(struct request_queue *q, struct request *rq)
 		SCpnt->cmnd[5] = 0;
 	}
 	SCpnt->sdb.length = this_count * sdp->sector_size;
-
-	/* If DIF or DIX is enabled, tell HBA how to handle request */
-	if (host_dif || scsi_prot_sg_count(SCpnt))
-		sd_prot_op(SCpnt, host_dif);
 
 	/*
 	 * We shouldn't disconnect in the middle of a sector, so with a dumb

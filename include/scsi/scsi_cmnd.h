@@ -9,8 +9,9 @@
 #include <linux/scatterlist.h>
 
 struct Scsi_Host;
-struct scsi_device;
 struct scsi_driver;
+
+#include <scsi/scsi_device.h>
 
 /*
  * MAX_COMMAND_SIZE is:
@@ -80,6 +81,7 @@ struct scsi_cmnd {
 
 	unsigned char prot_op;
 	unsigned char prot_type;
+	unsigned char prot_flags;
 
 	unsigned short cmd_len;
 	enum dma_data_direction sc_data_direction;
@@ -245,6 +247,20 @@ static inline unsigned char scsi_get_prot_op(struct scsi_cmnd *scmd)
 	return scmd->prot_op;
 }
 
+enum scsi_prot_flags {
+	SCSI_PROT_TRANSFER_PI		= 1 << 0,
+	SCSI_PROT_GUARD_CHECK		= 1 << 1,
+	SCSI_PROT_REF_CHECK		= 1 << 2,
+	SCSI_PROT_REF_INCREMENT		= 1 << 3,
+	SCSI_PROT_IP_CHECKSUM		= 1 << 4,
+};
+
+static inline unsigned int scsi_prot_flagged(struct scsi_cmnd *scmd,
+					     enum scsi_prot_flags flag)
+{
+	return scmd->prot_flags & flag;
+}
+
 /*
  * The controller usually does not know anything about the target it
  * is communicating with.  However, when DIX is enabled the controller
@@ -271,6 +287,17 @@ static inline unsigned char scsi_get_prot_type(struct scsi_cmnd *scmd)
 static inline sector_t scsi_get_lba(struct scsi_cmnd *scmd)
 {
 	return blk_rq_pos(scmd->request);
+}
+
+static inline unsigned int scsi_prot_interval(struct scsi_cmnd *scmd)
+{
+	return scmd->device->sector_size;
+}
+
+static inline u32 scsi_prot_ref_tag(struct scsi_cmnd *scmd)
+{
+	return blk_rq_pos(scmd->request) >>
+		(ilog2(scsi_prot_interval(scmd)) - 9) & 0xffffffff;
 }
 
 static inline unsigned scsi_prot_sg_count(struct scsi_cmnd *cmd)
