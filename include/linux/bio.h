@@ -309,6 +309,7 @@ enum bip_flags {
 	BIP_MAPPED_INTEGRITY,	/* integrity metadata has been remapped */
 	BIP_CTRL_NOCHECK,	/* disable controller integrity checking */
 	BIP_DISK_NOCHECK,	/* disable disk integrity checking */
+	BIP_IP_CHECKSUM,	/* IP checksum */
 };
 
 static inline bool bip_get_flag(struct bio_integrity_payload *bip,
