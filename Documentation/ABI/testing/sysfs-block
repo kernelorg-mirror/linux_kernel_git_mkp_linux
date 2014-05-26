@@ -53,6 +53,15 @@ Description:
 		512 bytes of data.
 
 
+What:		/sys/block/<disk>/integrity/disk
+Date:		February 2011
+Contact:	Martin K. Petersen <martin.petersen@oracle.com>
+Description:
+		Indicates whether a storage device is capable of
+		persistently storing integrity metadata. Set if the
+		device is T10 PI-capable.
+
+
 What:		/sys/block/<disk>/integrity/write_generate
 Date:		June 2008
 Contact:	Martin K. Petersen <martin.petersen@oracle.com>
