@@ -2428,6 +2428,18 @@ bool blk_update_request(struct request *req, int error, unsigned int nr_bytes)
 		case -ENODATA:
 			error_type = "critical medium";
 			break;
+		case -ECTRLGRD:
+		case -ECTRLAPP:
+		case -ECTRLREF:
+		case -EDISKGRD:
+		case -EDISKAPP:
+		case -EDISKREF:
+		case -EKERNGRD:
+		case -EKERNAPP:
+		case -EKERNREF:
+		case -EILSEQ:
+			error_type = "data integrity";
+			break;
 		case -EIO:
 		default:
 			error_type = "I/O";

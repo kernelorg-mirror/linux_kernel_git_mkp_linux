@@ -110,4 +110,15 @@
 
 #define EHWPOISON	133	/* Memory page has hardware error */
 
+/* data integrity errors */
+#define ECTRLGRD	134	/* I/O controller detected guard tag error */
+#define ECTRLAPP	135	/* I/O controller detected app tag error */
+#define ECTRLREF	136	/* I/O controller detected ref tag error */
+#define EDISKGRD	137	/* Storage device detected guard tag error */
+#define EDISKAPP	138	/* Storage device detected app tag error */
+#define EDISKREF	139	/* Storage device detected ref tag error */
+#define EKERNGRD	140	/* Kernel detected guard tag error */
+#define EKERNAPP	141	/* Kernel detected app tag error */
+#define EKERNREF	142	/* Kernel detected ref tag error */
+
 #endif

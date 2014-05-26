@@ -1208,6 +1208,15 @@ static int noretry_error(int error)
 	case -EOPNOTSUPP:
 	case -EREMOTEIO:
 	case -EILSEQ:
+	case -ECTRLGRD:
+	case -ECTRLAPP:
+	case -ECTRLREF:
+	case -EDISKGRD:
+	case -EDISKAPP:
+	case -EDISKREF:
+	case -EKERNGRD:
+	case -EKERNAPP:
+	case -EKERNREF:
 	case -ENODATA:
 	case -ENOSPC:
 		return 1;

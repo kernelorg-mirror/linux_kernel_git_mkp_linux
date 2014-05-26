@@ -892,7 +892,12 @@ void scsi_io_completion(struct scsi_cmnd *cmd, unsigned int good_bytes)
 			} else if (sshdr.asc == 0x10) /* DIX */ {
 				description = "Host Data Integrity Failure";
 				action = ACTION_FAIL;
-				error = -EILSEQ;
+				switch (sshdr.ascq) {
+				case 0x1: error = -ECTRLGRD; break;
+				case 0x2: error = -ECTRLAPP; break;
+				case 0x3: error = -ECTRLREF; break;
+				default:  error = -EILSEQ;   break;
+				}
 			/* INVALID COMMAND OPCODE or INVALID FIELD IN CDB */
 			} else if (sshdr.asc == 0x20 || sshdr.asc == 0x24) {
 				switch (cmd->cmnd[0]) {
@@ -920,7 +925,12 @@ void scsi_io_completion(struct scsi_cmnd *cmd, unsigned int good_bytes)
 			action = ACTION_FAIL;
 			if (sshdr.asc == 0x10) { /* DIF */
 				description = "Target Data Integrity Failure";
-				error = -EILSEQ;
+				switch (sshdr.ascq) {
+				case 0x1: error = -EDISKGRD; break;
+				case 0x2: error = -EDISKAPP; break;
+				case 0x3: error = -EDISKREF; break;
+				default:  error = -EILSEQ;   break;
+				}
 			}
 			break;
 		case NOT_READY:
