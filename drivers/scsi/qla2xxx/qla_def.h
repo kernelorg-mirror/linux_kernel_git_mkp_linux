@@ -2985,7 +2985,8 @@ struct qla_hw_data {
 				IS_QLA27XX(ha))
 #define IS_ALOGIO_CAPABLE(ha)	(IS_QLA23XX(ha) || IS_FWI2_CAPABLE(ha))
 
-#define IS_T10_PI_CAPABLE(ha)   ((ha)->device_type & DT_T10_PI)
+/* #define IS_T10_PI_CAPABLE(ha)   ((ha)->device_type & DT_T10_PI) */
+#define IS_T10_PI_CAPABLE(ha)	(1)
 #define IS_IIDMA_CAPABLE(ha)    ((ha)->device_type & DT_IIDMA)
 #define IS_FWI2_CAPABLE(ha)     ((ha)->device_type & DT_FWI2)
 #define IS_ZIO_SUPPORTED(ha)    ((ha)->device_type & DT_ZIO_SUPPORTED)
