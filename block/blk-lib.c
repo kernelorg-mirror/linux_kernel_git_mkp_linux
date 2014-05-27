@@ -305,3 +305,88 @@ int blkdev_issue_zeroout(struct block_device *bdev, sector_t sector,
 	return __blkdev_issue_zeroout(bdev, sector, nr_sects, gfp_mask);
 }
 EXPORT_SYMBOL(blkdev_issue_zeroout);
+
+/**
+ * blkdev_issue_copy - queue a copy same operation
+ * @src_bdev:	source blockdev
+ * @src_sector:	source sector
+ * @dst_bdev:	destination blockdev
+ * @dst_sector: destination sector
+ * @nr_sects:	number of sectors to copy
+ * @gfp_mask:	memory allocation flags (for bio_alloc)
+ *
+ * Description:
+ *    Copy a block range from source device to target device.
+ */
+int blkdev_issue_copy(struct block_device *src_bdev, sector_t src_sector,
+		      struct block_device *dst_bdev, sector_t dst_sector,
+		      unsigned int nr_sects, gfp_t gfp_mask)
+{
+	DECLARE_COMPLETION_ONSTACK(wait);
+	struct request_queue *sq = bdev_get_queue(src_bdev);
+	struct request_queue *dq = bdev_get_queue(dst_bdev);
+	unsigned int max_copy_sectors;
+	struct bio_batch bb;
+	int ret = 0;
+
+	if (!sq || !dq)
+		return -ENXIO;
+
+	max_copy_sectors = min(sq->limits.max_copy_sectors,
+			       dq->limits.max_copy_sectors);
+
+	if (max_copy_sectors == 0)
+		return -EOPNOTSUPP;
+
+	atomic_set(&bb.done, 1);
+	bb.flags = 1 << BIO_UPTODATE;
+	bb.wait = &wait;
+
+	while (nr_sects) {
+		struct bio *bio;
+		struct bio_copy *bc;
+		unsigned int chunk;
+
+		bc = kmalloc(sizeof(struct bio_copy), gfp_mask);
+		if (!bc) {
+			ret = -ENOMEM;
+			break;
+		}
+
+		bio = bio_alloc(gfp_mask, 1);
+		if (!bio) {
+			kfree(bc);
+			ret = -ENOMEM;
+			break;
+		}
+
+		chunk = min(nr_sects, max_copy_sectors);
+
+		bio->bi_iter.bi_sector = dst_sector;
+		bio->bi_iter.bi_size = chunk << 9;
+		bio->bi_end_io = bio_batch_end_io;
+		bio->bi_bdev = dst_bdev;
+		bio->bi_private = &bb;
+		bio->bi_special.copy = bc;
+
+		bc->bic_bdev = src_bdev;
+		bc->bic_sector = src_sector;
+
+		atomic_inc(&bb.done);
+		submit_bio(REQ_WRITE | REQ_COPY, bio);
+
+		src_sector += chunk;
+		dst_sector += chunk;
+		nr_sects -= chunk;
+	}
+
+	/* Wait for bios in-flight */
+	if (!atomic_dec_and_test(&bb.done))
+		wait_for_completion_io(&wait);
+
+	if (!test_bit(BIO_UPTODATE, &bb.flags))
+		ret = -ENOTSUPP;
+
+	return ret;
+}
+EXPORT_SYMBOL(blkdev_issue_copy);
