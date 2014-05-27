@@ -251,8 +251,8 @@ static inline unsigned bio_segments(struct bio *bio)
 	struct bvec_iter iter;
 
 	/*
-	 * We special case discard/write same, because they interpret bi_size
-	 * differently:
+	 * We special case discard/write same/copy, because they
+	 * interpret bi_size differently:
 	 */
 
 	if (bio->bi_rw & REQ_DISCARD)
@@ -261,10 +261,21 @@ static inline unsigned bio_segments(struct bio *bio)
 	if (bio->bi_rw & REQ_WRITE_SAME)
 		return 1;
 
+	if (bio->bi_rw & REQ_COPY)
+		return 1;
+
 	bio_for_each_segment(bv, bio, iter)
 		segs++;
 
 	return segs;
+}
+
+static inline struct bio_copy *bio_copy(struct bio *bio)
+{
+	if (bio->bi_rw & REQ_COPY)
+		return bio->bi_special.copy;
+
+	return NULL;
 }
 
 /*

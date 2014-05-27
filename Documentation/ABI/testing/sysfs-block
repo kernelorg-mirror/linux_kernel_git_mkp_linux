@@ -220,3 +220,12 @@ Description:
 		write_same_max_bytes is 0, write same is not supported
 		by the device.
 
+
+What:		/sys/block/<disk>/queue/copy_max_bytes
+Date:		January 2014
+Contact:	Martin K. Petersen <martin.petersen@oracle.com>
+Description:
+		Devices that support copy offloading will set this value
+		to indicate the maximum buffer size in bytes that can be
+		copied in one operation. If the copy_max_bytes is 0 the
+		device does not support copy offload.
