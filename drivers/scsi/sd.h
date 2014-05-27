@@ -19,6 +19,7 @@
  */
 #define SD_FLUSH_TIMEOUT_MULTIPLIER	2
 #define SD_WRITE_SAME_TIMEOUT	(120 * HZ)
+#define SD_COPY_TIMEOUT		(120 * HZ)
 
 /*
  * Number of allowed retries
@@ -46,6 +47,8 @@ enum {
 enum {
 	SD_MAX_WS10_BLOCKS = 0xffff,
 	SD_MAX_WS16_BLOCKS = 0x7fffff,
+	SD_MAX_CSD2_BLOCKS = 0xffff,
+	SD_MAX_COPY_BLOCKS = 0x7fffff,
 };
 
 enum {
@@ -66,6 +69,7 @@ struct scsi_disk {
 	sector_t	capacity;	/* size in 512-byte sectors */
 	u32		max_ws_blocks;
 	u32		max_unmap_blocks;
+	u32		max_copy_blocks;
 	u32		unmap_granularity;
 	u32		unmap_alignment;
 	u32		index;
