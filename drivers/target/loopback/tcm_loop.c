@@ -213,7 +213,7 @@ static void tcm_loop_submission_work(struct work_struct *work)
 
 	}
 
-	transfer_length = scsi_transfer_length(sc);
+	transfer_length = scsi_transfer_length(sc, scsi_out(sc));
 	if (!scsi_prot_sg_count(sc) &&
 	    scsi_get_prot_op(sc) != SCSI_PROT_NORMAL) {
 		se_cmd->prot_pto = true;

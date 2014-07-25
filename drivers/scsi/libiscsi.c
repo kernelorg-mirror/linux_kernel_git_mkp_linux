@@ -391,7 +391,7 @@ static int iscsi_prep_scsi_cmd_pdu(struct iscsi_task *task)
 	if (scsi_get_prot_op(sc) != SCSI_PROT_NORMAL)
 		task->protected = true;
 
-	transfer_length = scsi_transfer_length(sc);
+	transfer_length = scsi_transfer_length(sc, scsi_out(sc));
 	hdr->data_length = cpu_to_be32(transfer_length);
 	if (sc->sc_data_direction == DMA_TO_DEVICE) {
 		struct iscsi_r2t_info *r2t = &task->unsol_r2t;

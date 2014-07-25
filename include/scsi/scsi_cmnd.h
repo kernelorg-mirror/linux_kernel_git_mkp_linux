@@ -313,9 +313,10 @@ static inline void set_driver_byte(struct scsi_cmnd *cmd, char status)
 	cmd->result = (cmd->result & 0x00ffffff) | (status << 24);
 }
 
-static inline unsigned scsi_transfer_length(struct scsi_cmnd *scmd)
+static inline unsigned scsi_transfer_length(struct scsi_cmnd *scmd,
+					    struct scsi_data_buffer *sdb)
 {
-	unsigned int xfer_len = scsi_out(scmd)->length;
+	unsigned int xfer_len = sdb->length;
 	unsigned int prot_op = scsi_get_prot_op(scmd);
 	unsigned int sector_size = scmd->device->sector_size;
 
