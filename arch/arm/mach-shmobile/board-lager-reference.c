@@ -12,35 +12,28 @@
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
 #include <linux/init.h>
 #include <linux/of_platform.h>
-#include <mach/r8a7790.h>
+
 #include <asm/mach/arch.h>
 
-static void __init lager_add_standard_devices(void)
-{
-	/* clocks are setup late during boot in the case of DT */
-	r8a7790_clock_init();
-
-	r8a7790_add_dt_devices();
-        of_platform_populate(NULL, of_default_bus_match_table, NULL, NULL);
-}
+#include "common.h"
+#include "r8a7790.h"
+#include "rcar-gen2.h"
 
 static const char *lager_boards_compat_dt[] __initdata = {
+	"renesas,lager",
 	"renesas,lager-reference",
 	NULL,
 };
 
 DT_MACHINE_START(LAGER_DT, "lager")
 	.smp		= smp_ops(r8a7790_smp_ops),
-	.init_early	= r8a7790_init_early,
+	.init_early	= shmobile_init_delay,
 	.init_time	= rcar_gen2_timer_init,
-	.init_machine	= lager_add_standard_devices,
+	.init_late	= shmobile_init_late,
+	.reserve	= rcar_gen2_reserve,
 	.dt_compat	= lager_boards_compat_dt,
 MACHINE_END

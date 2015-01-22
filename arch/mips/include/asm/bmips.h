@@ -46,8 +46,35 @@
 
 #include <linux/cpumask.h>
 #include <asm/r4kcache.h>
+#include <asm/smp-ops.h>
 
-extern struct plat_smp_ops bmips_smp_ops;
+extern struct plat_smp_ops bmips43xx_smp_ops;
+extern struct plat_smp_ops bmips5000_smp_ops;
+
+static inline int register_bmips_smp_ops(void)
+{
+#if IS_ENABLED(CONFIG_CPU_BMIPS) && IS_ENABLED(CONFIG_SMP)
+	switch (current_cpu_type()) {
+	case CPU_BMIPS32:
+	case CPU_BMIPS3300:
+		return register_up_smp_ops();
+	case CPU_BMIPS4350:
+	case CPU_BMIPS4380:
+		register_smp_ops(&bmips43xx_smp_ops);
+		break;
+	case CPU_BMIPS5000:
+		register_smp_ops(&bmips5000_smp_ops);
+		break;
+	default:
+		return -ENODEV;
+	}
+
+	return 0;
+#else
+	return -ENODEV;
+#endif
+}
+
 extern char bmips_reset_nmi_vec;
 extern char bmips_reset_nmi_vec_end;
 extern char bmips_smp_movevec;
@@ -57,6 +84,7 @@ extern char bmips_smp_int_vec_end;
 extern int bmips_smp_enabled;
 extern int bmips_cpu_offset;
 extern cpumask_t bmips_booted_mask;
+extern unsigned long bmips_tp1_irqs;
 
 extern void bmips_ebase_setup(void);
 extern asmlinkage void plat_wired_tlb_setup(void);

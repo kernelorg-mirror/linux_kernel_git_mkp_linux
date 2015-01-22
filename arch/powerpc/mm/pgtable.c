@@ -24,7 +24,6 @@
 #include <linux/kernel.h>
 #include <linux/gfp.h>
 #include <linux/mm.h>
-#include <linux/init.h>
 #include <linux/percpu.h>
 #include <linux/hardirq.h>
 #include <linux/hugetlb.h>
@@ -49,7 +48,7 @@ static inline int pte_looks_normal(pte_t pte)
 	    (_PAGE_PRESENT | _PAGE_USER);
 }
 
-struct page * maybe_pte_to_page(pte_t pte)
+static struct page *maybe_pte_to_page(pte_t pte)
 {
 	unsigned long pfn = pte_pfn(pte);
 	struct page *page;
@@ -174,7 +173,7 @@ void set_pte_at(struct mm_struct *mm, unsigned long addr, pte_t *ptep,
 		pte_t pte)
 {
 #ifdef CONFIG_DEBUG_VM
-	WARN_ON(pte_present(*ptep));
+	WARN_ON(pte_val(*ptep) & _PAGE_PRESENT);
 #endif
 	/* Note: mm->context.id might not yet have been assigned as
 	 * this context might not have been activated yet when this
