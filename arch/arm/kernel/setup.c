@@ -246,12 +246,9 @@ static int __get_cpu_architecture(void)
 		if (cpu_arch)
 			cpu_arch += CPU_ARCH_ARMv3;
 	} else if ((read_cpuid_id() & 0x000f0000) == 0x000f0000) {
-		unsigned int mmfr0;
-
 		/* Revised CPUID format. Read the Memory Model Feature
 		 * Register 0 and check for VMSAv7 or PMSAv7 */
-		asm("mrc	p15, 0, %0, c0, c1, 4"
-		    : "=r" (mmfr0));
+		unsigned int mmfr0 = read_cpuid_ext(CPUID_EXT_MMFR0);
 		if ((mmfr0 & 0x0000000f) >= 0x00000003 ||
 		    (mmfr0 & 0x000000f0) >= 0x00000030)
 			cpu_arch = CPU_ARCH_ARMv7;
@@ -657,10 +654,13 @@ int __init arm_add_memory(u64 start, u64 size)
 
 	/*
 	 * Ensure that start/size are aligned to a page boundary.
-	 * Size is appropriately rounded down, start is rounded up.
+	 * Size is rounded down, start is rounded up.
 	 */
-	size -= start & ~PAGE_MASK;
 	aligned_start = PAGE_ALIGN(start);
+	if (aligned_start > start + size)
+		size = 0;
+	else
+		size -= aligned_start - start;
 
 #ifndef CONFIG_ARCH_PHYS_ADDR_T_64BIT
 	if (aligned_start > ULONG_MAX) {
