@@ -1004,59 +1004,128 @@ static int sd_setup_flush_cmnd(struct scsi_cmnd *cmd)
 	return BLKPREP_OK;
 }
 
-static int sd_setup_read_write_cmnd(struct scsi_cmnd *SCpnt)
+static int sd_setup_read_write_32_cmnd(struct scsi_cmnd *cmd, bool write,
+				       sector_t lba, unsigned int nr_blocks,
+				       unsigned char flags)
 {
-	struct request *rq = SCpnt->request;
-	struct scsi_device *sdp = SCpnt->device;
-	struct gendisk *disk = rq->rq_disk;
-	struct scsi_disk *sdkp = scsi_disk(disk);
+	cmd->cmnd = mempool_alloc(sd_cdb_pool, GFP_ATOMIC);
+	if (unlikely(cmd->cmnd == NULL))
+		return BLKPREP_DEFER;
+
+	cmd->cmd_len = SD_EXT_CDB_SIZE;
+	memset(cmd->cmnd, 0, cmd->cmd_len);
+
+	cmd->cmnd[0]  = VARIABLE_LENGTH_CMD;
+	cmd->cmnd[7]  = 0x18;				/* Additional CDB len */
+	cmd->cmnd[9]  = write ? WRITE_32 : READ_32;
+	cmd->cmnd[10] = flags;
+	put_unaligned_be64(lba, &cmd->cmnd[12]);	/* LBA */
+	put_unaligned_be32(lba, &cmd->cmnd[20]);	/* EI LBA */
+	put_unaligned_be32(nr_blocks, &cmd->cmnd[28]);	/* Transfer length */
+
+	return BLKPREP_OK;
+}
+
+static int sd_setup_read_write_16_cmnd(struct scsi_cmnd *cmd, bool write,
+				       sector_t lba, unsigned int nr_blocks,
+				       unsigned char flags)
+{
+	cmd->cmd_len  = 16;
+	cmd->cmnd[0]  = write ? WRITE_16 : READ_16;
+	cmd->cmnd[1]  = flags;
+	cmd->cmnd[14] = 0;
+	cmd->cmnd[15] = 0;
+	put_unaligned_be64(lba, &cmd->cmnd[2]);
+	put_unaligned_be32(nr_blocks, &cmd->cmnd[10]);
+
+	return BLKPREP_OK;
+}
+
+static int sd_setup_read_write_10_cmnd(struct scsi_cmnd *cmd, bool write,
+				       sector_t lba, unsigned int nr_blocks,
+				       unsigned char flags)
+{
+	cmd->cmd_len = 10;
+	cmd->cmnd[0] = write ? WRITE_10 : READ_10;
+	cmd->cmnd[1] = flags;
+	cmd->cmnd[6] = 0;
+	cmd->cmnd[9] = 0;
+	put_unaligned_be32(lba, &cmd->cmnd[2]);
+	put_unaligned_be16(nr_blocks, &cmd->cmnd[7]);
+
+	return BLKPREP_OK;
+}
+
+static int sd_setup_read_write_6_cmnd(struct scsi_cmnd *cmd, bool write,
+				      sector_t lba, unsigned int nr_blocks,
+				      unsigned char flags)
+{
+	if (unlikely(flags & 0x8)) {
+		/*
+		 * This happens only if this drive failed 10byte rw
+		 * command with ILLEGAL_REQUEST during operation and
+		 * thus turned off use_10_for_rw.
+		 */
+		scmd_printk(KERN_ERR, cmd, "FUA write on READ/WRITE(6) drive\n");
+		return BLKPREP_KILL;
+	}
+
+	cmd->cmd_len = 6;
+	cmd->cmnd[0] = write ? WRITE_6 : READ_6;
+	cmd->cmnd[1] = (unsigned char) ((lba >> 16) & 0x1f);
+	cmd->cmnd[2] = (unsigned char) ((lba >> 8) & 0xff);
+	cmd->cmnd[3] = (unsigned char) lba & 0xff;
+	cmd->cmnd[4] = (unsigned char) nr_blocks;
+	cmd->cmnd[5] = 0;
+
+	return BLKPREP_OK;
+}
+
+static int sd_setup_read_write_cmnd(struct scsi_cmnd *cmd)
+{
+	struct request *rq = cmd->request;
+	struct scsi_device *sdp = cmd->device;
+	struct scsi_disk *sdkp = scsi_disk(rq->rq_disk);
 	sector_t lba = sectors_to_logical(sdp, blk_rq_pos(rq));
 	sector_t threshold;
 	unsigned int nr_blocks = sectors_to_logical(sdp, blk_rq_sectors(rq));
-	unsigned int dif, dix;
 	unsigned int mask = logical_to_sectors(sdp, 1) - 1;
+	unsigned char protect, fua;
+	bool write = rq_data_dir(rq) == WRITE;
+	bool dif, dix;
 	int ret;
-	unsigned char protect;
 
-	ret = scsi_init_io(SCpnt);
+	ret = scsi_init_io(cmd);
 	if (ret != BLKPREP_OK)
-		return ret;
-	WARN_ON_ONCE(SCpnt != rq->special);
+		goto out;
 
-	/* from here on until we're complete, any goto out
-	 * is used for a killable error condition */
-	ret = BLKPREP_KILL;
+	WARN_ON_ONCE(cmd != rq->special);
 
-	SCSI_LOG_HLQUEUE(1,
-		scmd_printk(KERN_INFO, SCpnt,
-			"%s: block=%llu, count=%d\n",
-			__func__, (unsigned long long)lba, nr_blocks));
-
-	if (!sdp || !scsi_device_online(sdp) ||
-	    lba + blk_rq_sectors(rq) > get_capacity(disk)) {
-		SCSI_LOG_HLQUEUE(2, scmd_printk(KERN_INFO, SCpnt,
-						"Finishing %u sectors\n",
-						blk_rq_sectors(rq)));
-		SCSI_LOG_HLQUEUE(2, scmd_printk(KERN_INFO, SCpnt,
-						"Retry with 0x%p\n", SCpnt));
+	if (!sdp || !scsi_device_online(sdp) || sdp->changed) {
+		scmd_printk(KERN_ERR, cmd, "device offline or changed\n");
+		ret = BLKPREP_KILL;
 		goto out;
 	}
 
-	if (sdp->changed) {
-		/*
-		 * quietly refuse to do anything to a changed disc until 
-		 * the changed bit has been reset
-		 */
-		/* printk("SCSI disk has been changed or is not present. Prohibiting further I/O.\n"); */
+	if (blk_rq_pos(rq) + blk_rq_sectors(rq)
+	    > logical_to_sectors(sdp, sdkp->capacity)) {
+		scmd_printk(KERN_ERR, cmd, "access beyond end of device\n");
+		ret = BLKPREP_KILL;
+		goto out;
+	}
+
+	if ((blk_rq_pos(rq) & mask) || (blk_rq_sectors(rq) & mask)) {
+		scmd_printk(KERN_ERR, cmd, "request not aligned to the logical block size\n");
+		ret = BLKPREP_KILL;
 		goto out;
 	}
 
 	/*
-	 * Some SD card readers can't handle multi-sector accesses which touch
-	 * the last one or two hardware sectors.  Split accesses as needed.
+	 * Some SD card readers can't handle multi-sector accesses which
+	 * touch the last one or two hardware sectors. Split accesses
+	 * as needed.
 	 */
-	threshold = get_capacity(disk) - SD_LAST_BUGGY_SECTORS *
-		(sdp->sector_size / 512);
+	threshold = sdkp->capacity - SD_LAST_BUGGY_SECTORS;
 
 	if (unlikely(sdp->last_sector_bug && lba + nr_blocks > threshold)) {
 		if (lba < threshold) {
@@ -1064,144 +1133,60 @@ static int sd_setup_read_write_cmnd(struct scsi_cmnd *SCpnt)
 			nr_blocks = threshold - lba;
 		} else {
 			/* Access only a single hardware sector */
-			nr_blocks = sdp->sector_size / 512;
+			nr_blocks = 1;
 		}
 	}
 
-	SCSI_LOG_HLQUEUE(2, scmd_printk(KERN_INFO, SCpnt, "block=%llu\n",
-					(unsigned long long)lba));
+	fua = (rq->cmd_flags & REQ_FUA) ? 0x8 : 0;
+	dix = scsi_prot_sg_count(cmd);
+	dif = scsi_host_dif_capable(cmd->device->host, sdkp->protection_type);
 
-	if ((blk_rq_pos(rq) & mask) || (blk_rq_sectors(rq) & mask)) {
-		scmd_printk(KERN_ERR, SCpnt, "request not aligned to the logical block size\n");
-		goto out;
-	}
-
-	if (rq_data_dir(rq) == WRITE) {
-		SCpnt->cmnd[0] = WRITE_6;
-
-		if (blk_integrity_rq(rq))
-			sd_dif_prepare(SCpnt);
-
-	} else if (rq_data_dir(rq) == READ) {
-		SCpnt->cmnd[0] = READ_6;
-	} else {
-		scmd_printk(KERN_ERR, SCpnt, "Unknown command %d\n", req_op(rq));
-		goto out;
-	}
-
-	SCSI_LOG_HLQUEUE(2, scmd_printk(KERN_INFO, SCpnt,
-					"%s %d/%u 512 byte blocks.\n",
-					(rq_data_dir(rq) == WRITE) ?
-					"writing" : "reading", nr_blocks,
-					blk_rq_sectors(rq)));
-
-	dix = scsi_prot_sg_count(SCpnt);
-	dif = scsi_host_dif_capable(SCpnt->device->host, sdkp->protection_type);
+	if (write && dix)
+		sd_dif_prepare(cmd);
 
 	if (dif || dix)
-		protect = sd_setup_protect_cmnd(SCpnt, dix, dif);
+		protect = sd_setup_protect_cmnd(cmd, dix, dif);
 	else
 		protect = 0;
 
 	if (protect && sdkp->protection_type == T10_PI_TYPE2_PROTECTION) {
-		SCpnt->cmnd = mempool_alloc(sd_cdb_pool, GFP_ATOMIC);
-
-		if (unlikely(SCpnt->cmnd == NULL)) {
-			ret = BLKPREP_DEFER;
-			goto out;
-		}
-
-		SCpnt->cmd_len = SD_EXT_CDB_SIZE;
-		memset(SCpnt->cmnd, 0, SCpnt->cmd_len);
-		SCpnt->cmnd[0] = VARIABLE_LENGTH_CMD;
-		SCpnt->cmnd[7] = 0x18;
-		SCpnt->cmnd[9] = (rq_data_dir(rq) == READ) ? READ_32 : WRITE_32;
-		SCpnt->cmnd[10] = protect | ((rq->cmd_flags & REQ_FUA) ? 0x8 : 0);
-
-		/* LBA */
-		SCpnt->cmnd[12] = sizeof(lba) > 4 ? (unsigned char) (lba >> 56) & 0xff : 0;
-		SCpnt->cmnd[13] = sizeof(lba) > 4 ? (unsigned char) (lba >> 48) & 0xff : 0;
-		SCpnt->cmnd[14] = sizeof(lba) > 4 ? (unsigned char) (lba >> 40) & 0xff : 0;
-		SCpnt->cmnd[15] = sizeof(lba) > 4 ? (unsigned char) (lba >> 32) & 0xff : 0;
-		SCpnt->cmnd[16] = (unsigned char) (lba >> 24) & 0xff;
-		SCpnt->cmnd[17] = (unsigned char) (lba >> 16) & 0xff;
-		SCpnt->cmnd[18] = (unsigned char) (lba >> 8) & 0xff;
-		SCpnt->cmnd[19] = (unsigned char) lba & 0xff;
-
-		/* Expected Indirect LBA */
-		SCpnt->cmnd[20] = (unsigned char) (lba >> 24) & 0xff;
-		SCpnt->cmnd[21] = (unsigned char) (lba >> 16) & 0xff;
-		SCpnt->cmnd[22] = (unsigned char) (lba >> 8) & 0xff;
-		SCpnt->cmnd[23] = (unsigned char) lba & 0xff;
-
-		/* Transfer length */
-		SCpnt->cmnd[28] = (unsigned char) (nr_blocks >> 24) & 0xff;
-		SCpnt->cmnd[29] = (unsigned char) (nr_blocks >> 16) & 0xff;
-		SCpnt->cmnd[30] = (unsigned char) (nr_blocks >> 8) & 0xff;
-		SCpnt->cmnd[31] = (unsigned char) nr_blocks & 0xff;
+		ret = sd_setup_read_write_32_cmnd(cmd, write, lba, nr_blocks,
+						  protect | fua);
 	} else if (sdp->use_16_for_rw || (nr_blocks > 0xffff)) {
-		SCpnt->cmnd[0] += READ_16 - READ_6;
-		SCpnt->cmnd[1] = protect | ((rq->cmd_flags & REQ_FUA) ? 0x8 : 0);
-		SCpnt->cmnd[2] = sizeof(lba) > 4 ? (unsigned char) (lba >> 56) & 0xff : 0;
-		SCpnt->cmnd[3] = sizeof(lba) > 4 ? (unsigned char) (lba >> 48) & 0xff : 0;
-		SCpnt->cmnd[4] = sizeof(lba) > 4 ? (unsigned char) (lba >> 40) & 0xff : 0;
-		SCpnt->cmnd[5] = sizeof(lba) > 4 ? (unsigned char) (lba >> 32) & 0xff : 0;
-		SCpnt->cmnd[6] = (unsigned char) (lba >> 24) & 0xff;
-		SCpnt->cmnd[7] = (unsigned char) (lba >> 16) & 0xff;
-		SCpnt->cmnd[8] = (unsigned char) (lba >> 8) & 0xff;
-		SCpnt->cmnd[9] = (unsigned char) lba & 0xff;
-		SCpnt->cmnd[10] = (unsigned char) (nr_blocks >> 24) & 0xff;
-		SCpnt->cmnd[11] = (unsigned char) (nr_blocks >> 16) & 0xff;
-		SCpnt->cmnd[12] = (unsigned char) (nr_blocks >> 8) & 0xff;
-		SCpnt->cmnd[13] = (unsigned char) nr_blocks & 0xff;
-		SCpnt->cmnd[14] = SCpnt->cmnd[15] = 0;
-	} else if ((nr_blocks > 0xff) || (lba > 0x1fffff) ||
-		   scsi_device_protection(SCpnt->device) ||
-		   SCpnt->device->use_10_for_rw) {
-		SCpnt->cmnd[0] += READ_10 - READ_6;
-		SCpnt->cmnd[1] = protect | ((rq->cmd_flags & REQ_FUA) ? 0x8 : 0);
-		SCpnt->cmnd[2] = (unsigned char) (lba >> 24) & 0xff;
-		SCpnt->cmnd[3] = (unsigned char) (lba >> 16) & 0xff;
-		SCpnt->cmnd[4] = (unsigned char) (lba >> 8) & 0xff;
-		SCpnt->cmnd[5] = (unsigned char) lba & 0xff;
-		SCpnt->cmnd[6] = SCpnt->cmnd[9] = 0;
-		SCpnt->cmnd[7] = (unsigned char) (nr_blocks >> 8) & 0xff;
-		SCpnt->cmnd[8] = (unsigned char) nr_blocks & 0xff;
+		ret = sd_setup_read_write_16_cmnd(cmd, write, lba, nr_blocks,
+						  protect | fua);
+	} else if ((nr_blocks > 0xff) || (lba > 0x1fffff) || sdp->use_10_for_rw
+		   || protect) {
+		ret = sd_setup_read_write_10_cmnd(cmd, write, lba, nr_blocks,
+						  protect | fua);
 	} else {
-		if (unlikely(rq->cmd_flags & REQ_FUA)) {
-			/*
-			 * This happens only if this drive failed
-			 * 10byte rw command with ILLEGAL_REQUEST
-			 * during operation and thus turned off
-			 * use_10_for_rw.
-			 */
-			scmd_printk(KERN_ERR, SCpnt,
-				    "FUA write on READ/WRITE(6) drive\n");
-			goto out;
-		}
-
-		SCpnt->cmnd[1] |= (unsigned char) ((lba >> 16) & 0x1f);
-		SCpnt->cmnd[2] = (unsigned char) ((lba >> 8) & 0xff);
-		SCpnt->cmnd[3] = (unsigned char) lba & 0xff;
-		SCpnt->cmnd[4] = (unsigned char) nr_blocks;
-		SCpnt->cmnd[5] = 0;
+		ret = sd_setup_read_write_6_cmnd(cmd, write, lba, nr_blocks,
+						 protect | fua);
 	}
-	SCpnt->sdb.length = nr_blocks * sdp->sector_size;
+
+	if (ret != BLKPREP_OK)
+		goto out;
 
 	/*
 	 * We shouldn't disconnect in the middle of a sector, so with a dumb
 	 * host adapter, it's safe to assume that we can at least transfer
 	 * this many bytes between each connect / disconnect.
 	 */
-	SCpnt->transfersize = sdp->sector_size;
-	SCpnt->underflow = nr_blocks << 9;
-	SCpnt->allowed = SD_MAX_RETRIES;
+	cmd->transfersize = sdp->sector_size;
+	cmd->underflow = nr_blocks << 9;
+	cmd->allowed = SD_MAX_RETRIES;
+	cmd->sdb.length = nr_blocks * sdp->sector_size;
 
-	/*
-	 * This indicates that the command is ready from our end to be
-	 * queued.
-	 */
-	ret = BLKPREP_OK;
+	SCSI_LOG_HLQUEUE(1,
+			 scmd_printk(KERN_INFO, cmd, "%s: block=%llu, count=%d\n",
+				     __func__, (unsigned long long)blk_rq_pos(rq),
+				     blk_rq_sectors(rq)));
+	SCSI_LOG_HLQUEUE(2,
+			 scmd_printk(KERN_INFO, cmd,
+				     "%s %d/%u 512 byte blocks.\n",
+				     write ? "writing" : "reading", nr_blocks,
+				     blk_rq_sectors(rq)));
+
  out:
 	return ret;
 }
