@@ -1021,58 +1021,46 @@ static int sd_setup_read_write_6_cmnd(struct scsi_cmnd *cmd, bool write,
 	return BLKPREP_OK;
 }
 
-static int sd_setup_read_write_cmnd(struct scsi_cmnd *SCpnt)
+static int sd_setup_read_write_cmnd(struct scsi_cmnd *cmd)
 {
-	struct request *rq = SCpnt->request;
-	struct scsi_device *sdp = SCpnt->device;
-	struct gendisk *disk = rq->rq_disk;
-	struct scsi_disk *sdkp = scsi_disk(disk);
+	struct request *rq = cmd->request;
+	struct scsi_device *sdp = cmd->device;
+	struct scsi_disk *sdkp = scsi_disk(rq->rq_disk);
 	sector_t lba = sectors_to_logical(sdp, blk_rq_pos(rq));
 	sector_t threshold;
 	unsigned int nr_blocks = sectors_to_logical(sdp, blk_rq_sectors(rq));
-	unsigned int dif, dix;
 	unsigned int mask = logical_to_sectors(sdp, 1) - 1;
+	unsigned char protect, fua;
 	bool zoned_write = sd_is_zoned(sdkp) && rq_data_dir(rq) == WRITE;
 	bool write = rq_data_dir(rq) == WRITE;
+	bool dif, dix;
 	int ret;
-	unsigned char protect, fua;
 
 	if (zoned_write) {
-		ret = sd_zbc_write_lock_zone(SCpnt);
+		ret = sd_zbc_write_lock_zone(cmd);
 		if (ret != BLKPREP_OK)
 			return ret;
 	}
 
-	ret = scsi_init_io(SCpnt);
+	ret = scsi_init_io(cmd);
 	if (ret != BLKPREP_OK)
 		goto out;
-	SCpnt = rq->special;
 
-	/* from here on until we're complete, any goto out
-	 * is used for a killable error condition */
-	ret = BLKPREP_KILL;
-
-	SCSI_LOG_HLQUEUE(1,
-		scmd_printk(KERN_INFO, SCpnt,
-			"%s: block=%llu, count=%d\n",
-			__func__, (unsigned long long)lba, nr_blocks));
-
-	if (!sdp || !scsi_device_online(sdp) ||
-	    lba + blk_rq_sectors(rq) > get_capacity(disk)) {
-		SCSI_LOG_HLQUEUE(2, scmd_printk(KERN_INFO, SCpnt,
-						"Finishing %u sectors\n",
-						blk_rq_sectors(rq)));
-		SCSI_LOG_HLQUEUE(2, scmd_printk(KERN_INFO, SCpnt,
-						"Retry with 0x%p\n", SCpnt));
+	if (!sdp || !scsi_device_online(sdp) || sdp->changed) {
+		scmd_printk(KERN_ERR, cmd, "device offline or changed\n");
+		ret = BLKPREP_KILL;
 		goto out;
 	}
 
-	if (sdp->changed) {
-		/*
-		 * quietly refuse to do anything to a changed disc until 
-		 * the changed bit has been reset
-		 */
-		/* printk("SCSI disk has been changed or is not present. Prohibiting further I/O.\n"); */
+	if (blk_rq_pos(rq) + blk_rq_sectors(rq) > get_capacity(rq->rq_disk)) {
+		scmd_printk(KERN_ERR, cmd, "access beyond end of device\n");
+		ret = BLKPREP_KILL;
+		goto out;
+	}
+
+	if ((blk_rq_pos(rq) & mask) || (blk_rq_sectors(rq) & mask)) {
+		scmd_printk(KERN_ERR, cmd, "request not aligned to the logical block size\n");
+		ret = BLKPREP_KILL;
 		goto out;
 	}
 
@@ -1092,80 +1080,60 @@ static int sd_setup_read_write_cmnd(struct scsi_cmnd *SCpnt)
 		}
 	}
 
-	SCSI_LOG_HLQUEUE(2, scmd_printk(KERN_INFO, SCpnt, "block=%llu\n",
-					(unsigned long long)lba));
-
-	if ((blk_rq_pos(rq) & mask) || (blk_rq_sectors(rq) & mask)) {
-		scmd_printk(KERN_ERR, SCpnt, "request not aligned to the logical block size\n");
-		goto out;
-	}
-
-	if (rq_data_dir(rq) == WRITE) {
-		SCpnt->cmnd[0] = WRITE_6;
-
-		if (blk_integrity_rq(rq))
-			sd_dif_prepare(SCpnt);
-
-	} else if (rq_data_dir(rq) == READ) {
-		SCpnt->cmnd[0] = READ_6;
-	} else {
-		scmd_printk(KERN_ERR, SCpnt, "Unknown command %d\n", req_op(rq));
-		goto out;
-	}
-
-	SCSI_LOG_HLQUEUE(2, scmd_printk(KERN_INFO, SCpnt,
-					"%s %d/%u 512 byte blocks.\n",
-					(rq_data_dir(rq) == WRITE) ?
-					"writing" : "reading", nr_blocks,
-					blk_rq_sectors(rq)));
-
 	fua = (rq->cmd_flags & REQ_FUA) ? 0x8 : 0;
-	dix = scsi_prot_sg_count(SCpnt);
-	dif = scsi_host_dif_capable(SCpnt->device->host, sdkp->protection_type);
+	dix = scsi_prot_sg_count(cmd);
+	dif = scsi_host_dif_capable(cmd->device->host, sdkp->protection_type);
+
+	if (write && dix)
+		sd_dif_prepare(cmd);
 
 	if (dif || dix)
-		protect = sd_setup_protect_cmnd(SCpnt, dix, dif);
+		protect = sd_setup_protect_cmnd(cmd, dix, dif);
 	else
 		protect = 0;
 
 	if (protect && sdkp->protection_type == T10_PI_TYPE2_PROTECTION) {
-		ret = sd_setup_read_write_32_cmnd(SCpnt, write, lba, nr_blocks,
+		ret = sd_setup_read_write_32_cmnd(cmd, write, lba, nr_blocks,
 						  protect | fua);
 	} else if (sdp->use_16_for_rw || (nr_blocks > 0xffff)) {
-		ret = sd_setup_read_write_16_cmnd(SCpnt, write, lba, nr_blocks,
+		ret = sd_setup_read_write_16_cmnd(cmd, write, lba, nr_blocks,
 						  protect | fua);
-	} else if ((nr_blocks > 0xff) || (lba > 0x1fffff) ||
-		   scsi_device_protection(SCpnt->device) ||
-		   SCpnt->device->use_10_for_rw) {
-		ret = sd_setup_read_write_10_cmnd(SCpnt, write, lba, nr_blocks,
+	} else if ((nr_blocks > 0xff) || (lba > 0x1fffff) || sdp->use_10_for_rw
+		   || protect) {
+		ret = sd_setup_read_write_10_cmnd(cmd, write, lba, nr_blocks,
 						  protect | fua);
 	} else {
-		ret = sd_setup_read_write_6_cmnd(SCpnt, write, lba, nr_blocks,
+		ret = sd_setup_read_write_6_cmnd(cmd, write, lba, nr_blocks,
 						 protect | fua);
 	}
 
 	if (ret != BLKPREP_OK)
 		goto out;
 
-	SCpnt->sdb.length = nr_blocks * sdp->sector_size;
-
 	/*
 	 * We shouldn't disconnect in the middle of a sector, so with a dumb
 	 * host adapter, it's safe to assume that we can at least transfer
 	 * this many bytes between each connect / disconnect.
 	 */
-	SCpnt->transfersize = sdp->sector_size;
-	SCpnt->underflow = nr_blocks << 9;
-	SCpnt->allowed = SD_MAX_RETRIES;
+	cmd->transfersize = sdp->sector_size;
+	cmd->underflow = nr_blocks << 9;
+	cmd->allowed = SD_MAX_RETRIES;
+	cmd->sdb.length = nr_blocks * sdp->sector_size;
 
-	/*
-	 * This indicates that the command is ready from our end to be
-	 * queued.
-	 */
-	ret = BLKPREP_OK;
+	SCSI_LOG_HLQUEUE(1,
+			 scmd_printk(KERN_INFO, cmd,
+				     "%s: block=%llu, count=%d\n", __func__,
+				     (unsigned long long)blk_rq_pos(rq),
+				     blk_rq_sectors(rq)));
+	SCSI_LOG_HLQUEUE(2,
+			 scmd_printk(KERN_INFO, cmd,
+				     "%s %d/%u 512 byte blocks.\n",
+				     write ? "writing" : "reading", nr_blocks,
+				     blk_rq_sectors(rq)));
+
  out:
 	if (zoned_write && ret != BLKPREP_OK)
-		sd_zbc_write_unlock_zone(SCpnt);
+		sd_zbc_write_unlock_zone(cmd);
 
 	return ret;
 }
