@@ -1087,7 +1087,6 @@ static int sd_setup_read_write_cmnd(struct scsi_cmnd *cmd)
 	struct scsi_device *sdp = cmd->device;
 	struct scsi_disk *sdkp = scsi_disk(rq->rq_disk);
 	sector_t lba = sectors_to_logical(sdp, blk_rq_pos(rq));
-	sector_t threshold;
 	unsigned int nr_blocks = sectors_to_logical(sdp, blk_rq_sectors(rq));
 	unsigned int mask = logical_to_sectors(sdp, 1) - 1;
 	unsigned char protect, fua;
@@ -1125,15 +1124,15 @@ static int sd_setup_read_write_cmnd(struct scsi_cmnd *cmd)
 	 * touch the last one or two hardware sectors. Split accesses
 	 * as needed.
 	 */
-	threshold = sdkp->capacity - SD_LAST_BUGGY_SECTORS;
+	if (unlikely(sdp->last_sector_bug)) {
+		sector_t threshold = sdkp->capacity - SD_LAST_BUGGY_SECTORS;
 
-	if (unlikely(sdp->last_sector_bug && lba + nr_blocks > threshold)) {
-		if (lba < threshold) {
-			/* Access up to the threshold but not beyond */
-			nr_blocks = threshold - lba;
-		} else {
+		if (unlikely(lba > threshold)) {
 			/* Access only a single hardware sector */
 			nr_blocks = 1;
+		} else if (unlikely(lba + nr_blocks > threshold)) {
+			/* Access up to the threshold but not beyond */
+			nr_blocks = threshold - lba;
 		}
 	}
 
