@@ -1100,20 +1100,20 @@ static int sd_setup_read_write_cmnd(struct scsi_cmnd *cmd)
 
 	WARN_ON_ONCE(cmd != rq->special);
 
-	if (!sdp || !scsi_device_online(sdp) || sdp->changed) {
+	if (unlikely(!sdp || !scsi_device_online(sdp) || sdp->changed)) {
 		scmd_printk(KERN_ERR, cmd, "device offline or changed\n");
 		ret = BLKPREP_KILL;
 		goto out;
 	}
 
-	if (blk_rq_pos(rq) + blk_rq_sectors(rq)
-	    > logical_to_sectors(sdp, sdkp->capacity)) {
+	if (unlikely(blk_rq_pos(rq) + blk_rq_sectors(rq)
+		     > logical_to_sectors(sdp, sdkp->capacity))) {
 		scmd_printk(KERN_ERR, cmd, "access beyond end of device\n");
 		ret = BLKPREP_KILL;
 		goto out;
 	}
 
-	if ((blk_rq_pos(rq) & mask) || (blk_rq_sectors(rq) & mask)) {
+	if (unlikely((blk_rq_pos(rq) & mask) || (blk_rq_sectors(rq) & mask))) {
 		scmd_printk(KERN_ERR, cmd, "request not aligned to the logical block size\n");
 		ret = BLKPREP_KILL;
 		goto out;
@@ -1172,7 +1172,7 @@ static int sd_setup_read_write_cmnd(struct scsi_cmnd *cmd)
 	 * this many bytes between each connect / disconnect.
 	 */
 	cmd->transfersize = sdp->sector_size;
-	cmd->underflow = nr_blocks << 9;
+	cmd->underflow = blk_rq_bytes(rq);
 	cmd->allowed = SD_MAX_RETRIES;
 	cmd->sdb.length = nr_blocks * sdp->sector_size;
 
