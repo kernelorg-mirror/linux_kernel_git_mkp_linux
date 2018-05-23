@@ -544,4 +544,10 @@ static inline struct nvme_ns *nvme_get_ns_from_dev(struct device *dev)
 int __init nvme_core_init(void);
 void nvme_core_exit(void);
 
+#ifdef CONFIG_NVME_VERBOSE_ERRORS
+extern void nvme_error_log(struct request *req);
+#else
+static inline void nvme_error_log(struct request *req) {}
+#endif	/* CONFIG_NVME_VERBOSE_ERRORS */
+
 #endif /* _NVME_H */

@@ -238,6 +238,10 @@ void nvme_complete_rq(struct request *req)
 			return;
 		}
 	}
+
+	if (unlikely(status != BLK_STS_OK))
+		nvme_error_log(req);
+
 	blk_mq_end_request(req, status);
 }
 EXPORT_SYMBOL_GPL(nvme_complete_rq);
