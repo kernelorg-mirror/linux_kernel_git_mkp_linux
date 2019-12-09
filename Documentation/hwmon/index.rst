@@ -136,6 +136,7 @@ Hardware Monitoring Kernel Drivers
    pxe1610
    pwm-fan
    raspberrypi-hwmon
+   drivetemp
    sch5627
    sch5636
    scpi-hwmon
