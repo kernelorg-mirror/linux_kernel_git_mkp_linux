@@ -2078,6 +2078,58 @@ scsi_mode_select(struct scsi_device *sdev, int pf, int sp, int modepage,
 }
 EXPORT_SYMBOL_GPL(scsi_mode_select);
 
+#define LOG_SENSE_LEN 10
+
+/**
+ *	scsi_log_sense - issue a LOG SENSE command
+ *
+ *	@sdev:		SCSI device to be queried
+ *	@page:		Log page being requested
+ *	@buffer:	Request buffer
+ *	@len:		Request buffer length
+ *
+ *	Returns number of bytes returned by device if successful.
+ *	Otherwise zero.
+ */
+u16
+scsi_log_sense(struct scsi_device *sdev, unsigned char page,
+	       unsigned char *buffer, u16 len)
+{
+	unsigned char cdb[LOG_SENSE_LEN] = { 0 };
+	struct scsi_sense_hdr sshdr;
+	unsigned int retries;
+	int result;
+
+	cdb[0] = LOG_SENSE;
+	cdb[2] = page;
+	put_unaligned_be16(len, &cdb[7]);
+
+	for (retries = 0 ; retries < 3 ; retries++) {
+		memset(buffer, 0, len);
+		memset(&sshdr, 0, sizeof(struct scsi_sense_hdr));
+		result = scsi_execute_req(sdev, cdb, DMA_FROM_DEVICE, buffer,
+					  len, &sshdr, 5 * HZ, 5, NULL);
+		if (result == 0)
+			break;
+
+		if (scsi_sense_valid(&sshdr))
+			switch (sshdr.sense_key) {
+			case NOT_READY:
+			case UNIT_ATTENTION:
+			case ABORTED_COMMAND:
+				continue;
+			}
+
+		return 0;
+	}
+
+	if ((buffer[0] & 0x3f) != page)
+		return 0;
+
+	return get_unaligned_be16(&buffer[2]);
+}
+EXPORT_SYMBOL(scsi_log_sense);
+
 /**
  *	scsi_mode_sense - issue a mode sense, falling back from 10 to six bytes if necessary.
  *	@sdev:	SCSI device to be queried

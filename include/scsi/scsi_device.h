@@ -395,6 +395,8 @@ extern int scsi_track_queue_full(struct scsi_device *, int);
 
 extern int scsi_set_medium_removal(struct scsi_device *, char);
 
+extern u16 scsi_log_sense(struct scsi_device *sdev, unsigned char page,
+			  unsigned char *buffer, u16 len);
 extern int scsi_mode_sense(struct scsi_device *sdev, int dbd, int modepage,
 			   unsigned char *buffer, int len, int timeout,
 			   int retries, struct scsi_mode_data *data,
