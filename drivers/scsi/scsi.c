@@ -387,7 +387,13 @@ EXPORT_SYMBOL_GPL(scsi_get_vpd_page);
 static struct scsi_vpd *scsi_get_vpd_buf(struct scsi_device *sdev, u8 page)
 {
 	struct scsi_vpd *vpd_buf;
-	int vpd_len = SCSI_VPD_PG_LEN, result;
+	int vpd_len, result;
+	unsigned char vpd_header[SCSI_VPD_HEADER_SIZE];
+
+	result = scsi_vpd_inquiry(sdev, vpd_header, page, SCSI_VPD_HEADER_SIZE);
+	if (result < SCSI_VPD_HEADER_SIZE || result > SCSI_VPD_MAX_SIZE)
+		return NULL;
+	vpd_len = result;
 
 retry_pg:
 	vpd_buf = kmalloc(sizeof(*vpd_buf) + vpd_len, GFP_KERNEL);
