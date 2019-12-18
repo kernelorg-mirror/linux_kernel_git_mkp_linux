@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
- * Hwmon client for SATA hard disk drives with temperature sensors
+ * Hwmon client for disk and solid state drives with temperature sensors
  * Copyright (C) 2019 Zodiac Inflight Innovations
  *
  * With input from:
@@ -10,8 +10,11 @@
  *    hwmon: Driver for SCSI/ATA temperature sensors
  *    by Constantin Baranov <const@mimas.ru>, submitted September 2009
  *
- * The primary means to read hard drive temperatures and temperature limits
- * is the SCT Command Transport feature set as specified in ATA8-ACS.
+ * The primary means to read drive temperatures and temperature limits for
+ * SCSI devices is the Temperature log page.
+ *
+ * The primary means to read drive temperatures and temperature limits for ATA
+ * devices is the SCT Command Transport feature set as specified in ATA8-ACS.
  * It can be used to read the current drive temperature, temperature limits,
  * and historic minimum and maximum temperatures. The SCT Command Transport
  * feature set is documented in "AT Attachment 8 - ATA/ATAPI Command Set
@@ -103,6 +106,7 @@
 #include <scsi/scsi_device.h>
 #include <scsi/scsi_driver.h>
 #include <scsi/scsi_proto.h>
+#include <asm/unaligned.h>
 
 struct drivetemp_data {
 	struct list_head list;		/* list of instantiated devices */
@@ -274,9 +278,96 @@ static int drivetemp_get_scttemp(struct drivetemp_data *st, u32 attr, long *val)
 	return err;
 }
 
+enum {
+	SCSI_LOG_BUFFER_SIZE		= 64,
+	SCSI_LOG_SENSE_PARAMETER_OFFSET	= 4,
+	SCSI_LOG_TEMP_PARAMETER_SIZE	= 6,
+	SCSI_LOG_PARM_TEMPERATURE	= 0,
+	SCSI_LOG_PARM_REFERENCE		= 1,
+};
+
+static int drivetemp_scsi_log(struct scsi_device *sdev, unsigned char *buffer,
+			      unsigned int len, u16 parm_code)
+{
+	u16 result;
+	unsigned int i;
+
+	result  = scsi_log_sense(sdev, 0x0d, buffer, len);
+	if (!result)
+		return -EINVAL;
+
+	buffer += SCSI_LOG_SENSE_PARAMETER_OFFSET;
+	result -= result % SCSI_LOG_TEMP_PARAMETER_SIZE;
+	if (result < SCSI_LOG_TEMP_PARAMETER_SIZE)
+		return -EINVAL;
+
+	for (i = 0; i < result ; i += SCSI_LOG_TEMP_PARAMETER_SIZE) {
+		if (get_unaligned_be16(&buffer[i]) == parm_code &&
+		    buffer[i + 3] == 2)
+			return buffer[i + 5] * 1000;
+	}
+
+	return 0;
+}
+
+static int drivetemp_get_scsi_temp(struct drivetemp_data *st, u32 attr,
+		long *val)
+{
+	struct scsi_device *sdev = st->sdev;
+	unsigned char *buffer;
+	u16 parm_code = 0;
+
+	switch (attr) {
+	case hwmon_temp_input:
+		parm_code = SCSI_LOG_PARM_TEMPERATURE;
+		break;
+	case hwmon_temp_max:
+		parm_code = SCSI_LOG_PARM_REFERENCE;
+		break;
+	}
+
+	buffer = kzalloc(SCSI_LOG_BUFFER_SIZE, GFP_KERNEL);
+	if (!buffer)
+		return -EINVAL;
+	*val = drivetemp_scsi_log(sdev, buffer, SCSI_LOG_BUFFER_SIZE, parm_code);
+	kfree(buffer);
+
+	return 0;
+}
+
+static int drivetemp_scsi_probe(struct drivetemp_data *st)
+{
+	struct scsi_device *sdev = st->sdev;
+	unsigned char *buffer;
+	int ref;
+
+	buffer = kzalloc(SCSI_LOG_BUFFER_SIZE, GFP_KERNEL);
+	if (!buffer)
+		return -ENOMEM;
+
+	if (drivetemp_scsi_log(sdev, buffer, SCSI_LOG_BUFFER_SIZE,
+			       SCSI_LOG_PARM_TEMPERATURE) < 0) {
+		kfree(buffer);
+		return -ENODEV;
+	}
+
+	ref = drivetemp_scsi_log(sdev, buffer, SCSI_LOG_BUFFER_SIZE,
+				 SCSI_LOG_PARM_REFERENCE);
+	if (ref >= 0) {
+		st->have_temp_max = true;
+		st->temp_max = ref;
+	}
+
+	st->get_temp = drivetemp_get_scsi_temp;
+	kfree(buffer);
+
+	return 0;
+}
+
 static int drivetemp_identify(struct drivetemp_data *st)
 {
 	struct scsi_device *sdev = st->sdev;
+	struct scsi_vpd *vpd;
 	u8 *buf = st->smartdata;
 	bool is_ata, is_sata;
 	bool have_sct_data_table;
@@ -286,52 +377,42 @@ static int drivetemp_identify(struct drivetemp_data *st)
 	u16 *ata_id;
 	u16 version;
 	long temp;
-	u8 *vpd;
 	int err;
 
-	/* bail out immediately if there is no inquiry data */
+	/* Bail out immediately if there is no inquiry data */
 	if (!sdev->inquiry || sdev->inquiry_len < 16)
 		return -ENODEV;
 
-	/*
-	 * Inquiry data sanity checks (per SAT-5):
-	 * - peripheral qualifier must be 0
-	 * - peripheral device type must be 0x0 (Direct access block device)
-	 * - SCSI Vendor ID is "ATA     "
-	 */
-	if (sdev->inquiry[0] ||
-	    strncmp(&sdev->inquiry[8], "ATA     ", 8))
+	/* Disk device? */
+	if (sdev->type != TYPE_DISK && sdev->type != TYPE_ZBC)
 		return -ENODEV;
 
-	vpd = kzalloc(1024, GFP_KERNEL);
-	if (!vpd)
-		return -ENOMEM;
+	/* SCSI Temperature log page present? */
+	if (drivetemp_scsi_probe(st) == 0)
+		return 0;
 
-	err = scsi_get_vpd_page(sdev, 0x89, vpd, 1024);
-	if (err) {
-		kfree(vpd);
-		return err;
-	}
+	/* SCSI-ATA Translation present? */
+	rcu_read_lock();
+	vpd = rcu_dereference(sdev->vpd_pg89);
 
 	/*
-	 * More sanity checks.
-	 * For VPD offsets and values see ANS Project INCITS 557,
-	 * "Information technology - SCSI / ATA Translation - 5 (SAT-5)".
+	 * Verify that ATA IDENTIFY DEVICE data is included in ATA Information
+	 * VPD and that the drive implements the SATA protocol.
 	 */
-	if (vpd[1] != 0x89 || vpd[2] != 0x02 || vpd[3] != 0x38 ||
-	    vpd[36] != 0x34 || vpd[56] != ATA_CMD_ID_ATA) {
-		kfree(vpd);
+	if (!vpd || vpd->len < 572 || vpd->data[56] != ATA_CMD_ID_ATA ||
+	    vpd->data[36] != 0x34) {
+		rcu_read_unlock();
 		return -ENODEV;
 	}
-	ata_id = (u16 *)&vpd[60];
+
+	ata_id = (u16 *)&vpd->data[60];
 	is_ata = ata_id_is_ata(ata_id);
 	is_sata = ata_id_is_sata(ata_id);
 	have_sct = ata_id_sct_supported(ata_id);
 	have_sct_data_table = ata_id_sct_data_tables(ata_id);
 	have_smart = ata_id_smart_supported(ata_id) &&
 				ata_id_smart_enabled(ata_id);
-
-	kfree(vpd);
+	rcu_read_unlock();
 
 	/* bail out if this is not a SATA device */
 	if (!is_ata || !is_sata)
@@ -571,5 +652,5 @@ module_init(drivetemp_init);
 module_exit(drivetemp_exit);
 
 MODULE_AUTHOR("Guenter Roeck <linus@roeck-us.net>");
-MODULE_DESCRIPTION("ATA temperature monitor");
+MODULE_DESCRIPTION("Drive temperature monitor");
 MODULE_LICENSE("GPL");
