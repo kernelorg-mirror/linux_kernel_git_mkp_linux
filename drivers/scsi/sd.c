@@ -378,6 +378,7 @@ static DEVICE_ATTR_RO(thin_provisioning);
 /* sysfs_match_string() requires dense arrays */
 static const char *lbp_mode[] = {
 	[SD_LBP_FULL]		= "full",
+	[SD_LBP_DEFAULT]	= "default",
 	[SD_LBP_UNMAP]		= "unmap",
 	[SD_LBP_WS16]		= "writesame_16",
 	[SD_LBP_WS10]		= "writesame_10",
@@ -400,7 +401,7 @@ provisioning_mode_store(struct device *dev, struct device_attribute *attr,
 {
 	struct scsi_disk *sdkp = to_scsi_disk(dev);
 	struct scsi_device *sdp = sdkp->device;
-	int mode;
+	enum sd_lbp_mode mode;
 
 	if (!capable(CAP_SYS_ADMIN))
 		return -EACCES;
@@ -417,6 +418,10 @@ provisioning_mode_store(struct device *dev, struct device_attribute *attr,
 	if (mode < 0)
 		return -EINVAL;
 
+	if (mode == SD_LBP_DEFAULT)
+		sdkp->provisioning_override = false;
+	else
+		sdkp->provisioning_override = true;
 	sd_config_discard(sdkp, mode);
 
 	return count;
@@ -765,23 +770,91 @@ static unsigned char sd_setup_protect_cmnd(struct scsi_cmnd *scmd,
 	return protect;
 }
 
-static void sd_config_discard(struct scsi_disk *sdkp, unsigned int mode)
+/*
+ * It took many iterations in T10 to develop a model for thinly provisioned
+ * devices. Linux was an early adopter of the concept of discards, and as a
+ * result of the SCSI spec being a moving target for several years, we have a
+ * set of heuristics in place that allow us to support a wide variety of
+ * devices that predate the final SBC specification.
+ *
+ * These heuristics are triggered by default during device discovery, but the
+ * user can subsequently override what the kernel decided by writing a
+ * particular mode string to a scsi_disk's provisioning_mode node in sysfs.
+ * For devices that predate any of the provisioning knobs in the spec but rely
+ * on zero-detection, it is possible to enable discard through the
+ * "writesame_zero" override.
+ *
+ * For Linux to automatically identify a SCSI disk as being thinly
+ * provisioned, the device must set the LBPME bit in READ CAPACITY(16).
+ *
+ * In the ratified version of T10 SBC-4, a device must also provide a Logical
+ * Block Provisioning VPD page which has three fields that indicate which
+ * provisioning commands the device supports. The device should also implement
+ * the extended version of the Block Limits VPD which is used to indicate any
+ * limitations on the size of unmap operations as well as alignment and
+ * granularity used inside the device.
+ *
+ * If the device supports the Logical Block Provisioning VPD, and sets the
+ * LBPU flag, and reports a MAXIMUM UNMAP LBA COUNT > 0 and a MAXIMUM UNMAP
+ * BLOCK DESCRIPTOR count > 0 in the extended Block Limits VPD, then we will
+ * use UNMAP for discards. Otherwise, if the device set LBPWS in the LBP VPD,
+ * we will use WRITE SAME(16) with the UNMAP bit set for discards.  Otherwise,
+ * if the device sets LBPWS10 in the LBP VPD, then we will use WRITE SAME(10)
+ * with the UNMAP bit set for discards.
+ *
+ * If the device does *not* support the Logical Block Provisioning VPD, we
+ * rely on the extended version of the Block Limits VPD. If that is supported,
+ * and and the device reports a MAXIMUM UNMAP LBA COUNT > 0 and a MAXIMUM
+ * UNMAP BLOCK DESCRIPTOR count > 0, then we will use UNMAP for discards.
+ * Otherwise we will use WRITE SAME(16) with the UNMAP bit set for discards.
+ *
+ * If a device implements the *short* version of the Block Limits VPD or does
+ * not have a Block Limits VPD at all, we default to using WRITE SAME(16) with
+ * the UNMAP bit set for discards.
+ *
+ * The possible values for provisioning_mode in sysfs are:
+ *
+ *   "full"           - the device does not support discard
+ *   "default"        - use heuristics outlined above to decide on command
+ *   "unmap"          - use the UNMAP command
+ *   "writesame_16"   - use the WRITE SAME(16) command with the UNMAP bit set
+ *   "writesame_10"   - use the WRITE SAME(10) command with the UNMAP bit set
+ *   "writesame_zero" - use WRITE SAME(16) with a zeroed payload, no UNMAP bit
+ *   "disabled"	      - discards disabled due to command failure
+ */
+static void sd_config_discard(struct scsi_disk *sdkp, enum sd_lbp_mode mode)
 {
 	struct request_queue *q = sdkp->disk->queue;
 	unsigned int logical_block_size = sdkp->device->sector_size;
 	unsigned int max_blocks = 0;
 
-	q->limits.discard_alignment =
-		sdkp->unmap_alignment * logical_block_size;
-	q->limits.discard_granularity =
-		max(sdkp->physical_block_size,
-		    sdkp->unmap_granularity * logical_block_size);
-	sdkp->provisioning_mode = mode;
-
 	switch (mode) {
+	case SD_LBP_DEFAULT:
+		if (sdkp->provisioning_override)
+			return;
+		if (sdkp->lbpvpd) { /* Logical Block Provisioning VPD supp. */
+			if (sdkp->lbpu && sdkp->max_unmap_blocks)
+				mode = SD_LBP_UNMAP;
+			else if (sdkp->lbpws)
+				mode = SD_LBP_WS16;
+			else if (sdkp->lbpws10)
+				mode = SD_LBP_WS10;
+			else
+				mode = SD_LBP_DISABLE;
+		} else if (sdkp->lblvpd) { /* Long Block Limits VPD supported */
+			if (sdkp->max_unmap_blocks)
+				mode = SD_LBP_UNMAP;
+			else
+				mode = SD_LBP_WS16;
+		} else /* LBPME only, no VPDs supported */
+			mode = SD_LBP_WS16;
+
+		/* fall through */
 
 	case SD_LBP_FULL:
 	case SD_LBP_DISABLE:
+		q->limits.discard_alignment = 0;
+		q->limits.discard_granularity = 0;
 		blk_queue_max_discard_sectors(q, 0);
 		blk_queue_flag_clear(QUEUE_FLAG_DISCARD, q);
 		return;
@@ -815,6 +888,12 @@ static void sd_config_discard(struct scsi_disk *sdkp, unsigned int mode)
 		break;
 	}
 
+	sdkp->provisioning_mode = mode;
+	q->limits.discard_alignment =
+		sdkp->unmap_alignment * logical_block_size;
+	q->limits.discard_granularity =
+		max(sdkp->physical_block_size,
+		    sdkp->unmap_granularity * logical_block_size);
 	blk_queue_max_discard_sectors(q, max_blocks * (logical_block_size >> 9));
 	blk_queue_flag_set(QUEUE_FLAG_DISCARD, q);
 }
@@ -2348,8 +2427,6 @@ static int read_capacity_16(struct scsi_disk *sdkp, struct scsi_device *sdp,
 
 		if (buffer[14] & 0x40) /* LBPRZ */
 			sdkp->lbprz = 1;
-
-		sd_config_discard(sdkp, SD_LBP_WS16);
 	}
 
 	sdkp->capacity = lba + 1;
@@ -2873,6 +2950,7 @@ static void sd_read_block_limits(struct scsi_disk *sdkp)
 	if (buffer[3] == 0x3c) {
 		unsigned int lba_count, desc_count;
 
+		sdkp->lblvpd = 1;
 		sdkp->max_ws_blocks = (u32)get_unaligned_be64(&buffer[36]);
 
 		if (!sdkp->lbpme)
@@ -2889,24 +2967,6 @@ static void sd_read_block_limits(struct scsi_disk *sdkp)
 		if (buffer[32] & 0x80)
 			sdkp->unmap_alignment =
 				get_unaligned_be32(&buffer[32]) & ~(1 << 31);
-
-		if (!sdkp->lbpvpd) { /* LBP VPD page not provided */
-
-			if (sdkp->max_unmap_blocks)
-				sd_config_discard(sdkp, SD_LBP_UNMAP);
-			else
-				sd_config_discard(sdkp, SD_LBP_WS16);
-
-		} else {	/* LBP VPD page tells us what to use */
-			if (sdkp->lbpu && sdkp->max_unmap_blocks)
-				sd_config_discard(sdkp, SD_LBP_UNMAP);
-			else if (sdkp->lbpws)
-				sd_config_discard(sdkp, SD_LBP_WS16);
-			else if (sdkp->lbpws10)
-				sd_config_discard(sdkp, SD_LBP_WS10);
-			else
-				sd_config_discard(sdkp, SD_LBP_DISABLE);
-		}
 	}
 
  out:
@@ -3182,6 +3242,9 @@ static int sd_revalidate_disk(struct gendisk *disk)
 		sd_read_app_tag_own(sdkp, buffer);
 		sd_read_write_same(sdkp, buffer);
 		sd_read_security(sdkp, buffer);
+
+		if (sdkp->lbpme)
+			sd_config_discard(sdkp, SD_LBP_DEFAULT);
 	}
 
 	/*
