@@ -2935,42 +2935,42 @@ static void sd_read_app_tag_own(struct scsi_disk *sdkp, unsigned char *buffer)
  */
 static void sd_read_block_limits(struct scsi_disk *sdkp)
 {
-	const int vpd_len = 64;
-	unsigned char *buffer = kmalloc(vpd_len, GFP_KERNEL);
+	unsigned int sector_sz = sdkp->device->sector_size;
+	struct scsi_vpd *vpd;
 
-	if (!buffer ||
-	    /* Block Limits VPD */
-	    scsi_get_vpd_page(sdkp->device, 0xb0, buffer, vpd_len))
+	rcu_read_lock();
+	vpd = rcu_dereference(sdkp->device->vpd_pgb0);
+	if (!vpd || vpd->len < 16)
 		goto out;
 
-	sdkp->min_xfer_blocks = get_unaligned_be16(&buffer[6]);
-	sdkp->max_xfer_blocks = get_unaligned_be32(&buffer[8]);
-	sdkp->opt_xfer_blocks = get_unaligned_be32(&buffer[12]);
+	sdkp->min_xfer_blocks = get_unaligned_be16(&vpd->data[6]);
+	sdkp->max_xfer_blocks = get_unaligned_be32(&vpd->data[8]);
+	sdkp->opt_xfer_blocks = get_unaligned_be32(&vpd->data[12]);
 
-	if (buffer[3] == 0x3c) {
+	if (vpd->len >= 64) {
 		unsigned int lba_count, desc_count;
 
 		sdkp->lblvpd = 1;
-		sdkp->max_ws_blocks = (u32)get_unaligned_be64(&buffer[36]);
+		sdkp->max_ws_blocks = (u32)get_unaligned_be64(&vpd->data[36]);
 
 		if (!sdkp->lbpme)
 			goto out;
 
-		lba_count = get_unaligned_be32(&buffer[20]);
-		desc_count = get_unaligned_be32(&buffer[24]);
+		lba_count = get_unaligned_be32(&vpd->data[20]);
+		desc_count = get_unaligned_be32(&vpd->data[24]);
 
 		if (lba_count && desc_count)
 			sdkp->max_unmap_blocks = lba_count;
 
-		sdkp->unmap_granularity = get_unaligned_be32(&buffer[28]);
+		sdkp->unmap_granularity = get_unaligned_be32(&vpd->data[28]);
 
-		if (buffer[32] & 0x80)
+		if (vpd->data[32] & 0x80)
 			sdkp->unmap_alignment =
-				get_unaligned_be32(&buffer[32]) & ~(1 << 31);
+				get_unaligned_be32(&vpd->data[32]) & ~(1 << 31);
 	}
 
  out:
-	kfree(buffer);
+	rcu_read_unlock();
 }
 
 /**
@@ -2980,18 +2980,15 @@ static void sd_read_block_limits(struct scsi_disk *sdkp)
 static void sd_read_block_characteristics(struct scsi_disk *sdkp)
 {
 	struct request_queue *q = sdkp->disk->queue;
-	unsigned char *buffer;
+	struct scsi_vpd *vpd;
 	u16 rot;
-	const int vpd_len = 64;
 
-	buffer = kmalloc(vpd_len, GFP_KERNEL);
-
-	if (!buffer ||
-	    /* Block Device Characteristics VPD */
-	    scsi_get_vpd_page(sdkp->device, 0xb1, buffer, vpd_len))
+	rcu_read_lock();
+	vpd = rcu_dereference(sdkp->device->vpd_pgb1);
+	if (!vpd || vpd->len < 8)
 		goto out;
 
-	rot = get_unaligned_be16(&buffer[4]);
+	rot = get_unaligned_be16(&vpd->data[4]);
 
 	if (rot == 1) {
 		blk_queue_flag_set(QUEUE_FLAG_NONROT, q);
@@ -3002,7 +2999,7 @@ static void sd_read_block_characteristics(struct scsi_disk *sdkp)
 		/* Host-managed */
 		q->limits.zoned = BLK_ZONED_HM;
 	} else {
-		sdkp->zoned = (buffer[8] >> 4) & 3;
+		sdkp->zoned = (vpd->data[8] >> 4) & 3;
 		if (sdkp->zoned == 1 && !disk_has_partitions(sdkp->disk)) {
 			/* Host-aware */
 			q->limits.zoned = BLK_ZONED_HA;
@@ -3019,7 +3016,7 @@ static void sd_read_block_characteristics(struct scsi_disk *sdkp)
 		      q->limits.zoned == BLK_ZONED_HM ? "managed" : "aware");
 
  out:
-	kfree(buffer);
+	rcu_read_unlock();
 }
 
 /**
@@ -3028,24 +3025,23 @@ static void sd_read_block_characteristics(struct scsi_disk *sdkp)
  */
 static void sd_read_block_provisioning(struct scsi_disk *sdkp)
 {
-	unsigned char *buffer;
-	const int vpd_len = 8;
+	struct scsi_vpd *vpd;
 
 	if (sdkp->lbpme == 0)
 		return;
 
-	buffer = kmalloc(vpd_len, GFP_KERNEL);
-
-	if (!buffer || scsi_get_vpd_page(sdkp->device, 0xb2, buffer, vpd_len))
+	rcu_read_lock();
+	vpd = rcu_dereference(sdkp->device->vpd_pgb2);
+	if (!vpd || vpd->len < 8)
 		goto out;
 
 	sdkp->lbpvpd	= 1;
-	sdkp->lbpu	= (buffer[5] >> 7) & 1;	/* UNMAP */
-	sdkp->lbpws	= (buffer[5] >> 6) & 1;	/* WRITE SAME(16) with UNMAP */
-	sdkp->lbpws10	= (buffer[5] >> 5) & 1;	/* WRITE SAME(10) with UNMAP */
+	sdkp->lbpu	= (vpd->data[5] >> 7) & 1; /* UNMAP */
+	sdkp->lbpws	= (vpd->data[5] >> 6) & 1; /* WRITE SAME(16) w/ UNMAP */
+	sdkp->lbpws10	= (vpd->data[5] >> 5) & 1; /* WRITE SAME(10) w/ UNMAP */
 
  out:
-	kfree(buffer);
+	rcu_read_unlock();
 }
 
 static void sd_read_write_same(struct scsi_disk *sdkp, unsigned char *buffer)
